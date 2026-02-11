@@ -1,6 +1,7 @@
 import bcrypt from "bcrypt";
 import Session from "../auth/session.model.js"; // if you have sessions collection
 import User from "./user.model.js";
+import { badRequest, conflict, notFound, unauthorized } from "../../utils/appError.js";
 
 const toSafeUser = (u) => ({
   _id: u._id.toString(),
@@ -33,28 +34,36 @@ export const getMe = async (id) => {
 export const updateMe = async (userId, payload) => {
   const user = await User.findById(userId).select("+password");
   if (!user) {
-    const err = new Error("User not found");
-    err.status = 404;
-    throw err;
+    throw notFound("User not found", "USER_NOT_FOUND");
   }
 
   if (!payload.currentPassword) {
-    const err = new Error("Current password is required");
-    err.status = 400;
-    throw err;
+    throw badRequest("Current password is required", "MISSING_CURRENT_PASSWORD");
   }
 
   const ok = await bcrypt.compare(payload.currentPassword, user.password);
   if (!ok) {
-    const err = new Error("Wrong password");
-    err.status = 401;
-    throw err;
+    throw unauthorized("Wrong password", "INVALID_PASSWORD");
   }
 
   // ✅ allowlist updates (only what you want editable)
   if (typeof payload.firstName === "string") user.firstName = payload.firstName.trim();
   if (typeof payload.lastName === "string") user.lastName = payload.lastName.trim();
-  if (typeof payload.phone === "string") user.phone = payload.phone.trim();
+  if (typeof payload.phone === "string") {
+    const nextPhone = payload.phone.trim();
+    if (nextPhone && nextPhone !== (user.phone || "")) {
+      const exists = await User.exists({
+        phone: nextPhone,
+        _id: { $ne: userId },
+      });
+      if (exists) {
+        throw conflict("Phone already in use", "PHONE_TAKEN", [
+          { field: "phone" },
+        ]);
+      }
+    }
+    user.phone = nextPhone;
+  }
 
   if (typeof payload.dateOfBirth === "string" && payload.dateOfBirth.trim()) {
     // expects "YYYY-MM-DD"
@@ -94,16 +103,12 @@ export const updateMe = async (userId, payload) => {
 export const deleteMe = async (userId, currentPassword) => {
   const user = await User.findById(userId).select("+password");
   if (!user) {
-    const err = new Error("User not found");
-    err.status = 404;
-    throw err;
+    throw notFound("User not found", "USER_NOT_FOUND");
   }
 
   const ok = await bcrypt.compare(currentPassword, user.password);
   if (!ok) {
-    const err = new Error("Wrong password");
-    err.status = 401;
-    throw err;
+    throw unauthorized("Wrong password", "INVALID_PASSWORD");
   }
 
   if (Session) {

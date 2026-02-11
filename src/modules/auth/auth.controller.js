@@ -1,6 +1,15 @@
 import { z } from "zod";
 import { REFRESH_COOKIE_NAME, getRefreshCookieOptions } from "./auth.cookies.js";
-import { listUserSessions, loginUser, refreshAccessToken, registerUser, revokeAllUserSessions, revokeUserSessionById } from "./auth.service.js";
+import {
+  listUserSessions,
+  loginUser,
+  refreshAccessToken,
+  registerUser,
+  revokeAllUserSessions,
+  revokeSession as revokeSessionByToken,
+  revokeUserSessionById,
+} from "./auth.service.js";
+import { unauthorized } from "../../utils/appError.js";
 
 const getClientIp = (req) =>
   req.headers["x-forwarded-for"]?.toString().split(",")[0].trim() ||
@@ -111,9 +120,7 @@ export const refresh = async (req, res, next) => {
   try {
     const refreshToken = req.cookies?.[REFRESH_COOKIE_NAME];
     if (!refreshToken) {
-      const err = new Error("No refresh token");
-      err.status = 401;
-      throw err;
+      throw unauthorized("No refresh token", "MISSING_REFRESH_TOKEN");
     }
 
     const { accessToken, refreshToken: newRefreshToken } =
@@ -129,50 +136,17 @@ export const refresh = async (req, res, next) => {
 };
 
 
-export const logout = async (req, res) => {
-  const refreshToken = req.cookies?.[REFRESH_COOKIE_NAME];
-  if (refreshToken) await revokeSession(refreshToken);
-
-  res.clearCookie(REFRESH_COOKIE_NAME, { path: "/api/auth/refresh" });
-  res.status(204).send();
-};
-
-
-export const revokeSession = async (req, res, next) => {
+export const logout = async (req, res, next) => {
   try {
-    const userId = req.user.id;
-    const { sessionId } = req.params;
-
-    const result = await revokeUserSessionById(userId, sessionId);
-
-    /**
-     * Optional: if the user revoked the CURRENT session (the one on this device),
-     * also clear the refresh cookie so this device stops refreshing.
-     *
-     * We can detect current sessionId from refresh cookie JWT (sid).
-     */
     const refreshToken = req.cookies?.[REFRESH_COOKIE_NAME];
-    if (refreshToken) {
-      try {
-        const payload = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
-        if (payload?.sid === sessionId) {
-          res.clearCookie(REFRESH_COOKIE_NAME, { path: "/api/auth/refresh" });
-        }
-      } catch {
-        // ignore
-      }
-    }
+    if (refreshToken) await revokeSessionByToken(refreshToken);
 
-    res.status(200).json({
-      success: true,
-      message: "Session revoked",
-      ...result,
-    });
+    res.clearCookie(REFRESH_COOKIE_NAME, { path: "/api/auth/refresh" });
+    res.status(204).send();
   } catch (err) {
     next(err);
   }
 };
-
 
 
 export const sessions = async (req, res, next) => {
@@ -220,4 +194,3 @@ export const logoutAll = async (req, res, next) => {
     next(err);
   }
 };
-

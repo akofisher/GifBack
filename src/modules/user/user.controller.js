@@ -3,6 +3,7 @@ import cloudinary from "../../config/cloudinary.js";
 import { REFRESH_COOKIE_NAME } from "../auth/auth.cookies.js";
 import User from "./user.model.js";
 import { deleteMe, getMe, updateMe } from "./user.service.js";
+import { badRequest, notFound } from "../../utils/appError.js";
 
 
 
@@ -71,7 +72,7 @@ export const deleteMeHandler = async (req, res, next) => {
 export const me = async (req, res, next) => {
   try {
     const user = await getMe(req.user.id);
-    if (!user) return res.status(404).json({ success: false, message: "User not found" });
+    if (!user) throw notFound("User not found", "USER_NOT_FOUND");
 
     res.json({ success: true, user });
   } catch (err) {
@@ -123,9 +124,7 @@ export const updateMyAvatar = async (req, res, next) => {
     const { avatarUrl, publicId } = req.body;
 
     if (!avatarUrl) {
-      const err = new Error("avatarUrl is required");
-      err.status = 400;
-      throw err;
+      throw badRequest("avatarUrl is required", "MISSING_AVATAR_URL");
     }
 
     const user = await User.findByIdAndUpdate(
@@ -144,5 +143,4 @@ export const updateMyAvatar = async (req, res, next) => {
     next(e);
   }
 };
-
 

@@ -5,6 +5,7 @@ import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 
 import { errorHandler } from "./middlewares/error.middleware.js";
+import { notFound } from "./utils/appError.js";
 import authRoutes from "./modules/auth/auth.routes.js";
 import userRoutes from "./modules/user/user.routes.js";
 
@@ -51,6 +52,10 @@ app.get("/", (req, res) => {
 
 app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
+
+app.use((req, res, next) => {
+  next(notFound("Route not found", "ROUTE_NOT_FOUND"));
+});
 
 /**
  * ❌ ERROR HANDLER (LAST)
