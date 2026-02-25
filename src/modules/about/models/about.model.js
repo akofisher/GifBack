@@ -34,12 +34,6 @@ const aboutSchema = new mongoose.Schema(
     subTitle: { type: String, default: "", trim: true },
     description: { type: String, required: true, trim: true },
 
-    contactPhone1: { type: String, default: "", trim: true },
-    contactPhone2: { type: String, default: "", trim: true },
-
-    email1: { type: String, default: "", trim: true },
-    email2: { type: String, default: "", trim: true },
-
     facebookLink: { type: String, default: "", trim: true },
     instagramLink: { type: String, default: "", trim: true },
     linkedinLink: { type: String, default: "", trim: true },

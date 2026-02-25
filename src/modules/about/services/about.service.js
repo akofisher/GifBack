@@ -25,9 +25,18 @@ const formatUserRef = (value) => {
 const formatEntry = (entry) => {
   if (!entry) return null;
   return {
-    ...entry,
+    _id: entry._id,
+    key: entry.key,
+    title: entry.title,
+    subTitle: entry.subTitle,
+    description: entry.description,
+    socialLinks: entry.socialLinks || [],
+    extraFields: entry.extraFields || [],
+    image: entry.image || null,
     createdBy: formatUserRef(entry.createdBy),
     updatedBy: formatUserRef(entry.updatedBy),
+    createdAt: entry.createdAt,
+    updatedAt: entry.updatedAt,
   };
 };
 
@@ -49,28 +58,21 @@ const findExistingAboutLean = async () => {
     .lean();
 };
 
-const applyPayload = (target, payload) => {
+const applyPayload = (target, payload, options = {}) => {
+  const hasSocialLinks = Boolean(options.hasSocialLinks);
+
   if (payload.title !== undefined) target.title = payload.title.trim();
   if (payload.subTitle !== undefined) target.subTitle = payload.subTitle.trim();
   if (payload.description !== undefined)
     target.description = payload.description.trim();
 
-  if (payload.contactPhone1 !== undefined)
-    target.contactPhone1 = payload.contactPhone1.trim();
-  if (payload.contactPhone2 !== undefined)
-    target.contactPhone2 = payload.contactPhone2.trim();
-
-  if (payload.email1 !== undefined) target.email1 = payload.email1.trim();
-  if (payload.email2 !== undefined) target.email2 = payload.email2.trim();
-
-  if (payload.facebookLink !== undefined) target.facebookLink = payload.facebookLink;
-  if (payload.instagramLink !== undefined)
-    target.instagramLink = payload.instagramLink;
-  if (payload.linkedinLink !== undefined) target.linkedinLink = payload.linkedinLink;
-  if (payload.tiktokLink !== undefined) target.tiktokLink = payload.tiktokLink;
-  if (payload.youtubeLink !== undefined) target.youtubeLink = payload.youtubeLink;
-
-  if (payload.socialLinks !== undefined) target.socialLinks = payload.socialLinks;
+  if (hasSocialLinks) {
+    target.socialLinks = Array.isArray(payload.socialLinks)
+      ? payload.socialLinks
+      : [];
+  } else if (payload.socialLinks !== undefined) {
+    target.socialLinks = payload.socialLinks;
+  }
   if (payload.extraFields !== undefined) target.extraFields = payload.extraFields;
   if (payload.image !== undefined) target.image = payload.image;
 };
@@ -97,15 +99,6 @@ export const createAboutEntry = async ({ userId, payload }) => {
       title: payload.title.trim(),
       subTitle: payload.subTitle?.trim() || "",
       description: payload.description.trim(),
-      contactPhone1: payload.contactPhone1?.trim() || "",
-      contactPhone2: payload.contactPhone2?.trim() || "",
-      email1: payload.email1?.trim() || "",
-      email2: payload.email2?.trim() || "",
-      facebookLink: payload.facebookLink || "",
-      instagramLink: payload.instagramLink || "",
-      linkedinLink: payload.linkedinLink || "",
-      tiktokLink: payload.tiktokLink || "",
-      youtubeLink: payload.youtubeLink || "",
       socialLinks: payload.socialLinks || [],
       extraFields: payload.extraFields || [],
       image: payload.image || null,
@@ -124,11 +117,11 @@ export const getAboutEntryForAdmin = async () => {
   return formatEntry(entry);
 };
 
-export const updateAboutEntry = async ({ userId, payload }) => {
+export const updateAboutEntry = async ({ userId, payload, hasSocialLinks = false }) => {
   const entry = await findExistingAbout();
   if (!entry) throw notFound("About data not found", "ABOUT_NOT_FOUND");
 
-  applyPayload(entry, payload);
+  applyPayload(entry, payload, { hasSocialLinks });
   entry.key = ABOUT_KEY;
   entry.updatedBy = userId;
   if (!entry.createdBy) entry.createdBy = userId;

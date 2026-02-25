@@ -36,10 +36,15 @@ export const getAdminAboutEntryHandler = async (req, res, next) => {
 
 export const updateAboutEntryHandler = async (req, res, next) => {
   try {
+    const hasSocialLinks = Object.prototype.hasOwnProperty.call(
+      req.body || {},
+      "socialLinks"
+    );
     const payload = updateAboutSchema.parse(req.body);
     const entry = await updateAboutEntry({
       userId: req.user.id,
       payload,
+      hasSocialLinks,
     });
     res.status(200).json({ success: true, entry });
   } catch (err) {
