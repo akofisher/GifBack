@@ -5,6 +5,7 @@ import logger from "../../../utils/logger.js";
 import { normalizeLanguage } from "../../../i18n/localization.js";
 import User from "../../user/models/user.model.js";
 import Session from "../models/session.model.js";
+import PendingRegistration from "../models/pending-registration.model.js";
 import {
   validateAgreementAcceptanceForRegistration,
 } from "../../agreement/services/agreement.service.js";
@@ -12,8 +13,18 @@ import { AppError, badRequest, conflict, forbidden, notFound, unauthorized } fro
 
 const ACCESS_TTL = process.env.ACCESS_TOKEN_TTL || "15m";
 const REFRESH_TTL = process.env.REFRESH_TOKEN_TTL || "365d";
-const EMAIL_VERIFICATION_REQUIRED =
-  (process.env.EMAIL_VERIFICATION_REQUIRED || "false").toLowerCase() === "true";
+const parseEnvBoolean = (value, fallback = false) => {
+  if (value === undefined || value === null || value === "") return fallback;
+  const normalized = String(value).trim().toLowerCase();
+  if (["true", "1", "yes", "on"].includes(normalized)) return true;
+  if (["false", "0", "no", "off"].includes(normalized)) return false;
+  return fallback;
+};
+
+const EMAIL_VERIFICATION_REQUIRED = parseEnvBoolean(
+  process.env.EMAIL_VERIFICATION_REQUIRED,
+  true
+);
 const EMAIL_VERIFY_CODE_TTL_MINUTES = Number(
   process.env.EMAIL_VERIFY_CODE_TTL_MINUTES || 10
 );
@@ -25,6 +36,9 @@ const EMAIL_VERIFY_MAX_ATTEMPTS = Number(
 );
 const EMAIL_VERIFICATION_SECRET =
   process.env.EMAIL_VERIFICATION_SECRET || process.env.JWT_SECRET || "email-secret";
+const PENDING_REGISTRATION_TTL_HOURS = Number(
+  process.env.PENDING_REGISTRATION_TTL_HOURS || 24
+);
 const PASSWORD_RESET_CODE_TTL_MINUTES = Number(
   process.env.PASSWORD_RESET_CODE_TTL_MINUTES || 10
 );
@@ -60,6 +74,9 @@ const randomVerificationCode = () =>
 
 const getVerificationExpiryDate = () =>
   new Date(Date.now() + EMAIL_VERIFY_CODE_TTL_MINUTES * 60 * 1000);
+
+const getPendingRegistrationExpiryDate = () =>
+  new Date(Date.now() + PENDING_REGISTRATION_TTL_HOURS * 60 * 60 * 1000);
 
 const getPasswordResetCodeExpiryDate = () =>
   new Date(Date.now() + PASSWORD_RESET_CODE_TTL_MINUTES * 60 * 1000);
@@ -117,6 +134,39 @@ const toSafeUser = (user) => ({
   dateOfBirth: user.dateOfBirth,
   createdAt: user.createdAt,
   updatedAt: user.updatedAt,
+});
+
+const buildPendingRegistrationPreview = ({
+  firstName = "",
+  lastName = "",
+  email = "",
+  phone = "",
+  preferredLanguage = "en",
+  dateOfBirth = null,
+}) => ({
+  _id: null,
+  firstName,
+  lastName,
+  email,
+  phone,
+  preferredLanguage: normalizeLanguage(preferredLanguage),
+  emailVerified: false,
+  role: "user",
+  isActive: false,
+  avatar: null,
+  stats: {
+    giving: 0,
+    exchanging: 0,
+    exchanged: 0,
+    given: 0,
+  },
+  agreementAcceptance: {
+    version: "",
+    acceptedAt: null,
+  },
+  dateOfBirth,
+  createdAt: null,
+  updatedAt: null,
 });
 
 const getEmailTransportConfig = () => {
@@ -297,6 +347,44 @@ const issueEmailVerificationCode = async (user, { force = false } = {}) => {
   return { sent: true };
 };
 
+const issuePendingEmailVerificationCode = async (
+  pendingRegistration,
+  { force = false } = {}
+) => {
+  if (!pendingRegistration) return { sent: false };
+
+  const now = new Date();
+  const sentAt = pendingRegistration.emailVerification?.sentAt
+    ? new Date(pendingRegistration.emailVerification.sentAt)
+    : null;
+  const cooldownMs = EMAIL_VERIFY_RESEND_COOLDOWN_SECONDS * 1000;
+
+  if (!force && sentAt && now.getTime() - sentAt.getTime() < cooldownMs) {
+    const retryAfterSeconds = Math.ceil(
+      (cooldownMs - (now.getTime() - sentAt.getTime())) / 1000
+    );
+    throw new AppError(
+      "Please wait before requesting another code",
+      429,
+      "EMAIL_VERIFICATION_RESEND_TOO_SOON",
+      [{ field: "retryAfterSeconds", message: String(retryAfterSeconds) }]
+    );
+  }
+
+  const code = randomVerificationCode();
+  pendingRegistration.emailVerification = {
+    codeHash: hashVerificationCode(pendingRegistration.email, code),
+    expiresAt: getVerificationExpiryDate(),
+    sentAt: now,
+    attempts: 0,
+  };
+  pendingRegistration.expiresAt = getPendingRegistrationExpiryDate();
+  await pendingRegistration.save();
+
+  await sendVerificationEmail({ to: pendingRegistration.email, code });
+  return { sent: true };
+};
+
 const issuePasswordResetCode = async (user, { force = false } = {}) => {
   if (!user) return { sent: false };
 
@@ -436,6 +524,75 @@ export const registerUser = async ({
   const normalizedEmail = email.toLowerCase().trim();
   const normalizedPhone = typeof phone === "string" ? phone.trim() : "";
   const normalizedPreferredLanguage = normalizeLanguage(preferredLanguage);
+  const agreementAcceptance = await validateAgreementAcceptanceForRegistration({
+    agreementAccepted,
+    agreementVersion,
+    userAgent,
+    ip,
+  });
+
+  if (EMAIL_VERIFICATION_REQUIRED) {
+    const existingUser = await User.findOne({ email: normalizedEmail })
+      .select("_id emailVerified")
+      .lean();
+
+    if (existingUser?.emailVerified) {
+      throw conflict("Email already in use", "DUPLICATE_CREDENTIALS", [
+        { field: "email", message: "Email already in use" },
+      ]);
+    }
+
+    if (existingUser && !existingUser.emailVerified) {
+      await Session.deleteMany({ userId: existingUser._id });
+      await User.deleteOne({ _id: existingUser._id });
+    }
+
+    const conflicts = [];
+    if (normalizedPhone && (await User.exists({ phone: normalizedPhone }))) {
+      conflicts.push({ field: "phone", message: "Phone already in use" });
+    }
+    if (conflicts.length) {
+      throw conflict("Phone already in use", "DUPLICATE_CREDENTIALS", conflicts);
+    }
+
+    const hashed = await bcrypt.hash(password, 12);
+    let pending = await PendingRegistration.findOne({ email: normalizedEmail }).select(
+      "+emailVerification.codeHash +emailVerification.expiresAt +emailVerification.sentAt +emailVerification.attempts +passwordHash"
+    );
+
+    if (!pending) {
+      pending = new PendingRegistration({ email: normalizedEmail, expiresAt: getPendingRegistrationExpiryDate() });
+    }
+
+    pending.firstName = firstName || "";
+    pending.lastName = lastName || "";
+    pending.phone = normalizedPhone || "";
+    pending.preferredLanguage = normalizedPreferredLanguage;
+    pending.dateOfBirth = dateOfBirth ? new Date(dateOfBirth) : null;
+    pending.passwordHash = hashed;
+    pending.agreementAcceptance = agreementAcceptance || undefined;
+    pending.expiresAt = getPendingRegistrationExpiryDate();
+
+    try {
+      await issuePendingEmailVerificationCode(pending, { force: true });
+    } catch (err) {
+      throw err;
+    }
+
+    return {
+      safeUser: buildPendingRegistrationPreview({
+        firstName: pending.firstName,
+        lastName: pending.lastName,
+        email: pending.email,
+        phone: pending.phone,
+        preferredLanguage: pending.preferredLanguage,
+        dateOfBirth: pending.dateOfBirth,
+      }),
+      accessToken: null,
+      refreshToken: null,
+      emailVerificationRequired: true,
+    };
+  }
 
   const conflicts = [];
   if (await User.exists({ email: normalizedEmail })) {
@@ -453,12 +610,6 @@ export const registerUser = async ({
   }
 
   const hashed = await bcrypt.hash(password, 12);
-  const agreementAcceptance = await validateAgreementAcceptanceForRegistration({
-    agreementAccepted,
-    agreementVersion,
-    userAgent,
-    ip,
-  });
 
   const user = await User.create({
     firstName,
@@ -475,29 +626,12 @@ export const registerUser = async ({
     agreementAcceptance: agreementAcceptance || undefined,
   });
 
-  if (EMAIL_VERIFICATION_REQUIRED) {
-    try {
-      await issueEmailVerificationCode(user, { force: true });
-    } catch (err) {
-      await User.deleteOne({ _id: user._id });
-      throw err;
-    }
-
-    return {
-      safeUser: toSafeUser(user),
-      accessToken: null,
-      refreshToken: null,
-      emailVerificationRequired: true,
-    };
-  }
-
   try {
     await issueEmailVerificationCode(user, { force: true });
   } catch (err) {
-    logger.warn(
-      { err, userId: user._id?.toString() },
-      "Verification email was not sent after registration (optional mode)"
-    );
+    await Session.deleteMany({ userId: user._id });
+    await User.deleteOne({ _id: user._id });
+    throw err;
   }
 
   const { accessToken, refreshToken } = await createSessionForUser({
@@ -521,11 +655,23 @@ export const requestEmailVerification = async (email) => {
     "+emailVerification.codeHash +emailVerification.expiresAt +emailVerification.sentAt +emailVerification.attempts"
   );
 
-  // Generic success for unknown emails to avoid account enumeration.
-  if (!user) return { sent: true };
-  if (user.emailVerified) return { sent: true };
+  if (user) {
+    if (user.emailVerified) return { sent: true };
+    await issueEmailVerificationCode(user);
+    return { sent: true };
+  }
 
-  await issueEmailVerificationCode(user);
+  if (EMAIL_VERIFICATION_REQUIRED) {
+    const pending = await PendingRegistration.findOne({
+      email: normalizedEmail,
+    }).select(
+      "+emailVerification.codeHash +emailVerification.expiresAt +emailVerification.sentAt +emailVerification.attempts +passwordHash"
+    );
+    if (pending) {
+      await issuePendingEmailVerificationCode(pending);
+    }
+  }
+
   return { sent: true };
 };
 
@@ -548,7 +694,110 @@ export const verifyEmailCode = async ({
   );
 
   if (!user) {
-    throw badRequest("Invalid verification code", "EMAIL_VERIFICATION_CODE_INVALID");
+    if (!EMAIL_VERIFICATION_REQUIRED) {
+      throw badRequest("Invalid verification code", "EMAIL_VERIFICATION_CODE_INVALID");
+    }
+
+    const pending = await PendingRegistration.findOne({
+      email: normalizedEmail,
+    }).select(
+      "+passwordHash +emailVerification.codeHash +emailVerification.expiresAt +emailVerification.sentAt +emailVerification.attempts"
+    );
+
+    if (!pending) {
+      throw badRequest("Invalid verification code", "EMAIL_VERIFICATION_CODE_INVALID");
+    }
+
+    const verification = pending.emailVerification || {};
+    if (!verification.codeHash || !verification.expiresAt) {
+      throw conflict(
+        "Verification code has expired. Please request a new one",
+        "EMAIL_VERIFICATION_CODE_EXPIRED"
+      );
+    }
+
+    const now = new Date();
+    if (now > new Date(verification.expiresAt)) {
+      throw conflict(
+        "Verification code has expired. Please request a new one",
+        "EMAIL_VERIFICATION_CODE_EXPIRED"
+      );
+    }
+
+    const attempts = Number(verification.attempts || 0);
+    if (attempts >= EMAIL_VERIFY_MAX_ATTEMPTS) {
+      throw new AppError(
+        "Too many attempts. Please request a new code",
+        429,
+        "EMAIL_VERIFICATION_TOO_MANY_ATTEMPTS"
+      );
+    }
+
+    const incomingHash = hashVerificationCode(normalizedEmail, normalizedCode);
+    if (incomingHash !== verification.codeHash) {
+      pending.emailVerification.attempts = attempts + 1;
+      await pending.save();
+
+      if (pending.emailVerification.attempts >= EMAIL_VERIFY_MAX_ATTEMPTS) {
+        throw new AppError(
+          "Too many attempts. Please request a new code",
+          429,
+          "EMAIL_VERIFICATION_TOO_MANY_ATTEMPTS"
+        );
+      }
+
+      throw badRequest("Invalid verification code", "EMAIL_VERIFICATION_CODE_INVALID");
+    }
+
+    const conflicts = [];
+    if (await User.exists({ email: normalizedEmail })) {
+      conflicts.push({ field: "email", message: "Email already in use" });
+    }
+    if (pending.phone && (await User.exists({ phone: pending.phone }))) {
+      conflicts.push({ field: "phone", message: "Phone already in use" });
+    }
+    if (conflicts.length) {
+      const message =
+        conflicts.length === 1
+          ? conflicts[0].message
+          : "Email and phone already in use";
+      throw conflict(message, "DUPLICATE_CREDENTIALS", conflicts);
+    }
+
+    const createdUser = await User.create({
+      firstName: pending.firstName || "",
+      lastName: pending.lastName || "",
+      phone: pending.phone || undefined,
+      preferredLanguage: normalizeLanguage(pending.preferredLanguage),
+      dateOfBirth: pending.dateOfBirth || null,
+      email: pending.email,
+      password: pending.passwordHash,
+      role: "user",
+      isActive: true,
+      emailVerified: true,
+      agreementAcceptance: pending.agreementAcceptance || undefined,
+      emailVerification: {
+        codeHash: "",
+        expiresAt: null,
+        sentAt: null,
+        attempts: 0,
+      },
+    });
+
+    await PendingRegistration.deleteOne({ _id: pending._id });
+
+    const sessionTokens = await createSessionForUser({
+      user: createdUser,
+      deviceId,
+      userAgent,
+      ip,
+    });
+
+    return {
+      user: toSafeUser(createdUser),
+      ...sessionTokens,
+      alreadyVerified: false,
+    };
   }
 
   if (user.emailVerified) {
