@@ -12,6 +12,9 @@ const optionalUrlSchema = z
 const donationMethodSchema = z.object({
   id: objectIdSchema.optional(),
   label: z.string().trim().min(1).max(120),
+  labelTranslations: z
+    .record(z.string().trim().min(1), z.string().trim().min(1).max(160))
+    .optional(),
   accountNumber: z.string().trim().min(1).max(120),
   link: optionalUrlSchema,
   isActive: z.boolean().optional(),

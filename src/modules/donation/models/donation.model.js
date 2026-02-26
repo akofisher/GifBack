@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 const donationMethodSchema = new mongoose.Schema(
   {
     label: { type: String, required: true, trim: true },
+    labelTranslations: { type: Map, of: String, default: {} },
     accountNumber: { type: String, required: true, trim: true },
     link: { type: String, default: "", trim: true },
     isActive: { type: Boolean, default: true },

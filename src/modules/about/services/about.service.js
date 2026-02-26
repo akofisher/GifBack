@@ -1,5 +1,10 @@
 import { notFound } from "../../../utils/appError.js";
 import About from "../models/about.model.js";
+import {
+  normalizeTranslationsInput,
+  resolveLocalizedText,
+  toPlainTranslations,
+} from "../../../i18n/content.js";
 
 const ABOUT_KEY = "ABOUT_US";
 
@@ -22,16 +27,72 @@ const formatUserRef = (value) => {
   };
 };
 
-const formatEntry = (entry) => {
+const formatSocialLinks = (links = [], locale = "en") =>
+  links.map((link) => {
+    const labelTranslations = toPlainTranslations(link.labelTranslations);
+    return {
+      key: link.key,
+      label: resolveLocalizedText({
+        locale,
+        baseValue: link.label || "",
+        translations: labelTranslations,
+      }),
+      labelTranslations,
+      url: link.url,
+    };
+  });
+
+const formatExtraFields = (fields = [], locale = "en") =>
+  fields.map((entry) => {
+    const keyTranslations = toPlainTranslations(entry.keyTranslations);
+    const valueTranslations = toPlainTranslations(entry.valueTranslations);
+    return {
+      key: resolveLocalizedText({
+        locale,
+        baseValue: entry.key || "",
+        translations: keyTranslations,
+      }),
+      keyTranslations,
+      value: resolveLocalizedText({
+        locale,
+        baseValue: entry.value || "",
+        translations: valueTranslations,
+      }),
+      valueTranslations,
+    };
+  });
+
+const formatEntry = (entry, locale = "en") => {
   if (!entry) return null;
+  const titleTranslations = toPlainTranslations(entry.titleTranslations);
+  const subTitleTranslations = toPlainTranslations(entry.subTitleTranslations);
+  const descriptionTranslations = toPlainTranslations(
+    entry.descriptionTranslations
+  );
+
   return {
     _id: entry._id,
     key: entry.key,
-    title: entry.title,
-    subTitle: entry.subTitle,
-    description: entry.description,
-    socialLinks: entry.socialLinks || [],
-    extraFields: entry.extraFields || [],
+    title: resolveLocalizedText({
+      locale,
+      baseValue: entry.title || "",
+      translations: titleTranslations,
+    }),
+    titleTranslations,
+    subTitle: resolveLocalizedText({
+      locale,
+      baseValue: entry.subTitle || "",
+      translations: subTitleTranslations,
+    }),
+    subTitleTranslations,
+    description: resolveLocalizedText({
+      locale,
+      baseValue: entry.description || "",
+      translations: descriptionTranslations,
+    }),
+    descriptionTranslations,
+    socialLinks: formatSocialLinks(entry.socialLinks || [], locale),
+    extraFields: formatExtraFields(entry.extraFields || [], locale),
     image: entry.image || null,
     createdBy: formatUserRef(entry.createdBy),
     updatedBy: formatUserRef(entry.updatedBy),
@@ -62,22 +123,47 @@ const applyPayload = (target, payload, options = {}) => {
   const hasSocialLinks = Boolean(options.hasSocialLinks);
 
   if (payload.title !== undefined) target.title = payload.title.trim();
+  if (payload.titleTranslations !== undefined) {
+    target.titleTranslations = normalizeTranslationsInput(payload.titleTranslations);
+  }
   if (payload.subTitle !== undefined) target.subTitle = payload.subTitle.trim();
+  if (payload.subTitleTranslations !== undefined) {
+    target.subTitleTranslations = normalizeTranslationsInput(
+      payload.subTitleTranslations
+    );
+  }
   if (payload.description !== undefined)
     target.description = payload.description.trim();
+  if (payload.descriptionTranslations !== undefined) {
+    target.descriptionTranslations = normalizeTranslationsInput(
+      payload.descriptionTranslations
+    );
+  }
 
   if (hasSocialLinks) {
     target.socialLinks = Array.isArray(payload.socialLinks)
-      ? payload.socialLinks
+      ? payload.socialLinks.map((entry) => ({
+          ...entry,
+          labelTranslations: normalizeTranslationsInput(entry.labelTranslations),
+        }))
       : [];
   } else if (payload.socialLinks !== undefined) {
-    target.socialLinks = payload.socialLinks;
+    target.socialLinks = payload.socialLinks.map((entry) => ({
+      ...entry,
+      labelTranslations: normalizeTranslationsInput(entry.labelTranslations),
+    }));
   }
-  if (payload.extraFields !== undefined) target.extraFields = payload.extraFields;
+  if (payload.extraFields !== undefined) {
+    target.extraFields = payload.extraFields.map((entry) => ({
+      ...entry,
+      keyTranslations: normalizeTranslationsInput(entry.keyTranslations),
+      valueTranslations: normalizeTranslationsInput(entry.valueTranslations),
+    }));
+  }
   if (payload.image !== undefined) target.image = payload.image;
 };
 
-export const createAboutEntry = async ({ userId, payload }) => {
+export const createAboutEntry = async ({ userId, payload, locale = "en" }) => {
   const existing = await findExistingAbout();
 
   if (existing) {
@@ -90,17 +176,27 @@ export const createAboutEntry = async ({ userId, payload }) => {
     const updated = await About.findById(existing._id)
       .populate(basePopulate)
       .lean();
-    return formatEntry(updated);
+    return formatEntry(updated, locale);
   }
 
   const [created] = await About.create([
     {
       key: ABOUT_KEY,
       title: payload.title.trim(),
+      titleTranslations: normalizeTranslationsInput(payload.titleTranslations),
       subTitle: payload.subTitle?.trim() || "",
+      subTitleTranslations: normalizeTranslationsInput(payload.subTitleTranslations),
       description: payload.description.trim(),
-      socialLinks: payload.socialLinks || [],
-      extraFields: payload.extraFields || [],
+      descriptionTranslations: normalizeTranslationsInput(payload.descriptionTranslations),
+      socialLinks: (payload.socialLinks || []).map((entry) => ({
+        ...entry,
+        labelTranslations: normalizeTranslationsInput(entry.labelTranslations),
+      })),
+      extraFields: (payload.extraFields || []).map((entry) => ({
+        ...entry,
+        keyTranslations: normalizeTranslationsInput(entry.keyTranslations),
+        valueTranslations: normalizeTranslationsInput(entry.valueTranslations),
+      })),
       image: payload.image || null,
       createdBy: userId,
       updatedBy: userId,
@@ -108,16 +204,21 @@ export const createAboutEntry = async ({ userId, payload }) => {
   ]);
 
   const entry = await About.findById(created._id).populate(basePopulate).lean();
-  return formatEntry(entry);
+  return formatEntry(entry, locale);
 };
 
-export const getAboutEntryForAdmin = async () => {
+export const getAboutEntryForAdmin = async (locale = "en") => {
   const entry = await findExistingAboutLean();
   if (!entry) throw notFound("About data not found", "ABOUT_NOT_FOUND");
-  return formatEntry(entry);
+  return formatEntry(entry, locale);
 };
 
-export const updateAboutEntry = async ({ userId, payload, hasSocialLinks = false }) => {
+export const updateAboutEntry = async ({
+  userId,
+  payload,
+  hasSocialLinks = false,
+  locale = "en",
+}) => {
   const entry = await findExistingAbout();
   if (!entry) throw notFound("About data not found", "ABOUT_NOT_FOUND");
 
@@ -128,7 +229,7 @@ export const updateAboutEntry = async ({ userId, payload, hasSocialLinks = false
 
   await entry.save();
   const updated = await About.findById(entry._id).populate(basePopulate).lean();
-  return formatEntry(updated);
+  return formatEntry(updated, locale);
 };
 
 export const deleteAboutEntry = async () => {
@@ -139,8 +240,8 @@ export const deleteAboutEntry = async () => {
   return { deleted: true, id: entry._id.toString() };
 };
 
-export const getAboutEntry = async () => {
+export const getAboutEntry = async (locale = "en") => {
   const entry = await findExistingAboutLean();
   if (!entry) throw notFound("About data not found", "ABOUT_NOT_FOUND");
-  return formatEntry(entry);
+  return formatEntry(entry, locale);
 };

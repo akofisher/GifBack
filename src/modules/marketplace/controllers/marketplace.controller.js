@@ -36,7 +36,10 @@ import {
 
 export const listCategoriesHandler = async (req, res, next) => {
   try {
-    const categories = await listCategories();
+    const categories = await listCategories(req.locale);
+    res.vary("Accept-Language");
+    res.vary("X-Language");
+    res.vary("X-Lang");
     const lastModified = categories.reduce((latest, category) => {
       const candidate = category?.updatedAt ? new Date(category.updatedAt) : null;
       if (!candidate || Number.isNaN(candidate.getTime())) return latest;
@@ -45,6 +48,7 @@ export const listCategoriesHandler = async (req, res, next) => {
     }, null);
     const etag = buildWeakEtag({
       resource: "categories",
+      locale: req.locale,
       total: categories.length,
       lastModified: lastModified?.toISOString?.() || null,
     });
@@ -61,7 +65,10 @@ export const listCategoriesHandler = async (req, res, next) => {
 
 export const listLocationsHandler = async (req, res, next) => {
   try {
-    const countries = await listLocations();
+    const countries = await listLocations(req.locale);
+    res.vary("Accept-Language");
+    res.vary("X-Language");
+    res.vary("X-Lang");
     const lastModified = countries.reduce((latest, country) => {
       const candidate = country?.updatedAt ? new Date(country.updatedAt) : null;
       if (!candidate || Number.isNaN(candidate.getTime())) return latest;
@@ -70,6 +77,7 @@ export const listLocationsHandler = async (req, res, next) => {
     }, null);
     const etag = buildWeakEtag({
       resource: "locations",
+      locale: req.locale,
       total: countries.length,
       lastModified: lastModified?.toISOString?.() || null,
     });
@@ -97,26 +105,28 @@ export const createItemHandler = async (req, res, next) => {
 export const listItemsHandler = async (req, res, next) => {
   try {
     const query = listItemsQuerySchema.parse(req.query || {});
-    const result = await getActiveItems(query);
+    const result = await getActiveItems(query, req.user?.id || null);
 
-    const lastModified =
-      result.items.reduce((latest, item) => {
-        const candidate = item?.updatedAt ? new Date(item.updatedAt) : null;
-        if (!candidate || Number.isNaN(candidate.getTime())) return latest;
-        if (!latest || candidate > latest) return candidate;
-        return latest;
-      }, null) || null;
-    const etag = buildWeakEtag({
-      resource: "items",
-      query,
-      total: result.pagination.total,
-      page: result.pagination.page,
-      limit: result.pagination.limit,
-      lastModified: lastModified?.toISOString?.() || null,
-    });
-    setCacheValidators(res, { etag, lastModified });
-    if (isRequestFresh(req, { etag, lastModified })) {
-      return res.status(304).end();
+    if (!req.user?.id) {
+      const lastModified =
+        result.items.reduce((latest, item) => {
+          const candidate = item?.updatedAt ? new Date(item.updatedAt) : null;
+          if (!candidate || Number.isNaN(candidate.getTime())) return latest;
+          if (!latest || candidate > latest) return candidate;
+          return latest;
+        }, null) || null;
+      const etag = buildWeakEtag({
+        resource: "items",
+        query,
+        total: result.pagination.total,
+        page: result.pagination.page,
+        limit: result.pagination.limit,
+        lastModified: lastModified?.toISOString?.() || null,
+      });
+      setCacheValidators(res, { etag, lastModified });
+      if (isRequestFresh(req, { etag, lastModified })) {
+        return res.status(304).end();
+      }
     }
 
     res.status(200).json({
@@ -132,7 +142,7 @@ export const listItemsHandler = async (req, res, next) => {
 
 export const getItemHandler = async (req, res, next) => {
   try {
-    const item = await getItemById(req.params.id);
+    const item = await getItemById(req.params.id, req.user?.id || null);
     res.status(200).json({ success: true, item });
   } catch (err) {
     next(err);

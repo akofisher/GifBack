@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { requireAuth } from "../../auth/middleware/auth.middleware.js";
-import { requireAdmin } from "../../admin/middleware/admin.middleware.js";
+import { requirePermission } from "../../admin/middleware/admin.middleware.js";
+import { ADMIN_PERMISSIONS } from "../../admin/rbac/rbac.js";
 import {
   createAboutEntryHandler,
   deleteAboutEntryHandler,
@@ -13,10 +14,29 @@ const router = Router();
 
 router.get("/about", getAboutEntryHandler);
 
-router.get("/admin/about", requireAuth, requireAdmin, getAdminAboutEntryHandler);
-router.post("/admin/about", requireAuth, requireAdmin, createAboutEntryHandler);
-router.patch("/admin/about", requireAuth, requireAdmin, updateAboutEntryHandler);
-router.delete("/admin/about", requireAuth, requireAdmin, deleteAboutEntryHandler);
+router.get(
+  "/admin/about",
+  requireAuth,
+  requirePermission(ADMIN_PERMISSIONS.ABOUT_MANAGE),
+  getAdminAboutEntryHandler
+);
+router.post(
+  "/admin/about",
+  requireAuth,
+  requirePermission(ADMIN_PERMISSIONS.ABOUT_MANAGE),
+  createAboutEntryHandler
+);
+router.patch(
+  "/admin/about",
+  requireAuth,
+  requirePermission(ADMIN_PERMISSIONS.ABOUT_MANAGE),
+  updateAboutEntryHandler
+);
+router.delete(
+  "/admin/about",
+  requireAuth,
+  requirePermission(ADMIN_PERMISSIONS.ABOUT_MANAGE),
+  deleteAboutEntryHandler
+);
 
 export default router;
-

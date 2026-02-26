@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { requireAuth } from "../../auth/middleware/auth.middleware.js";
-import { requireAdmin } from "../middleware/admin.middleware.js";
+import { requirePermission } from "../middleware/admin.middleware.js";
+import { ADMIN_PERMISSIONS } from "../rbac/rbac.js";
 import {
   createAdminCategoryHandler,
   createAdminLocationCityHandler,
@@ -13,10 +14,12 @@ import {
   getAdminTopGivenLeaderboardHandler,
   getAdminItemByIdHandler,
   getAdminStatsHandler,
+  listAdminStaffHandler,
   listAdminCategoriesHandler,
   listAdminLocationsHandler,
   listAdminItemsHandler,
   listAdminUsersHandler,
+  registerAdminStaffHandler,
   setAdminUserBlockedStateHandler,
   updateAdminLocationCityHandler,
   updateAdminLocationCountryHandler,
@@ -26,79 +29,142 @@ import {
 
 const router = Router();
 
-router.get("/admin/stats", requireAuth, requireAdmin, getAdminStatsHandler);
+router.get(
+  "/admin/stats",
+  requireAuth,
+  requirePermission(ADMIN_PERMISSIONS.STATS_VIEW),
+  getAdminStatsHandler
+);
 router.get(
   "/admin/leaderboard/given",
   requireAuth,
-  requireAdmin,
+  requirePermission(ADMIN_PERMISSIONS.LEADERBOARD_VIEW),
   getAdminTopGivenLeaderboardHandler
 );
 
-router.get("/admin/users", requireAuth, requireAdmin, listAdminUsersHandler);
+router.get(
+  "/admin/users",
+  requireAuth,
+  requirePermission(ADMIN_PERMISSIONS.USERS_LIST),
+  listAdminUsersHandler
+);
 router.patch(
   "/admin/users/:id/status",
   requireAuth,
-  requireAdmin,
+  requirePermission(ADMIN_PERMISSIONS.USERS_STATUS_UPDATE),
   setAdminUserBlockedStateHandler
 );
-router.delete("/admin/users/:id", requireAuth, requireAdmin, deleteAdminUserHandler);
+router.delete(
+  "/admin/users/:id",
+  requireAuth,
+  requirePermission(ADMIN_PERMISSIONS.USERS_DELETE),
+  deleteAdminUserHandler
+);
 
-router.get("/admin/categories", requireAuth, requireAdmin, listAdminCategoriesHandler);
-router.post("/admin/categories", requireAuth, requireAdmin, createAdminCategoryHandler);
+router.get(
+  "/admin/staff",
+  requireAuth,
+  requirePermission(ADMIN_PERMISSIONS.STAFF_LIST),
+  listAdminStaffHandler
+);
+router.post(
+  "/admin/staff/register",
+  requireAuth,
+  requirePermission(ADMIN_PERMISSIONS.STAFF_CREATE),
+  registerAdminStaffHandler
+);
+
+router.get(
+  "/admin/categories",
+  requireAuth,
+  requirePermission(ADMIN_PERMISSIONS.CATEGORIES_MANAGE),
+  listAdminCategoriesHandler
+);
+router.post(
+  "/admin/categories",
+  requireAuth,
+  requirePermission(ADMIN_PERMISSIONS.CATEGORIES_MANAGE),
+  createAdminCategoryHandler
+);
 router.patch(
   "/admin/categories/:id",
   requireAuth,
-  requireAdmin,
+  requirePermission(ADMIN_PERMISSIONS.CATEGORIES_MANAGE),
   updateAdminCategoryHandler
 );
 router.delete(
   "/admin/categories/:id",
   requireAuth,
-  requireAdmin,
+  requirePermission(ADMIN_PERMISSIONS.CATEGORIES_MANAGE),
   deleteAdminCategoryHandler
 );
 
-router.get("/admin/locations/countries", requireAuth, requireAdmin, listAdminLocationsHandler);
+router.get(
+  "/admin/locations/countries",
+  requireAuth,
+  requirePermission(ADMIN_PERMISSIONS.LOCATIONS_MANAGE),
+  listAdminLocationsHandler
+);
 router.post(
   "/admin/locations/countries",
   requireAuth,
-  requireAdmin,
+  requirePermission(ADMIN_PERMISSIONS.LOCATIONS_MANAGE),
   createAdminLocationCountryHandler
 );
 router.patch(
   "/admin/locations/countries/:countryId",
   requireAuth,
-  requireAdmin,
+  requirePermission(ADMIN_PERMISSIONS.LOCATIONS_MANAGE),
   updateAdminLocationCountryHandler
 );
 router.delete(
   "/admin/locations/countries/:countryId",
   requireAuth,
-  requireAdmin,
+  requirePermission(ADMIN_PERMISSIONS.LOCATIONS_MANAGE),
   deleteAdminLocationCountryHandler
 );
 router.post(
   "/admin/locations/countries/:countryId/cities",
   requireAuth,
-  requireAdmin,
+  requirePermission(ADMIN_PERMISSIONS.LOCATIONS_MANAGE),
   createAdminLocationCityHandler
 );
 router.patch(
   "/admin/locations/countries/:countryId/cities/:cityId",
   requireAuth,
-  requireAdmin,
+  requirePermission(ADMIN_PERMISSIONS.LOCATIONS_MANAGE),
   updateAdminLocationCityHandler
 );
 router.delete(
   "/admin/locations/countries/:countryId/cities/:cityId",
   requireAuth,
-  requireAdmin,
+  requirePermission(ADMIN_PERMISSIONS.LOCATIONS_MANAGE),
   deleteAdminLocationCityHandler
 );
 
-router.get("/admin/items", requireAuth, requireAdmin, listAdminItemsHandler);
-router.get("/admin/items/:id", requireAuth, requireAdmin, getAdminItemByIdHandler);
-router.patch("/admin/items/:id", requireAuth, requireAdmin, updateAdminItemHandler);
-router.delete("/admin/items/:id", requireAuth, requireAdmin, deleteAdminItemHandler);
+router.get(
+  "/admin/items",
+  requireAuth,
+  requirePermission(ADMIN_PERMISSIONS.ITEMS_MANAGE),
+  listAdminItemsHandler
+);
+router.get(
+  "/admin/items/:id",
+  requireAuth,
+  requirePermission(ADMIN_PERMISSIONS.ITEMS_MANAGE),
+  getAdminItemByIdHandler
+);
+router.patch(
+  "/admin/items/:id",
+  requireAuth,
+  requirePermission(ADMIN_PERMISSIONS.ITEMS_MANAGE),
+  updateAdminItemHandler
+);
+router.delete(
+  "/admin/items/:id",
+  requireAuth,
+  requirePermission(ADMIN_PERMISSIONS.ITEMS_MANAGE),
+  deleteAdminItemHandler
+);
 
 export default router;

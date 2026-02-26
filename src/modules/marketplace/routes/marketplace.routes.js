@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { requireAuth } from "../../auth/middleware/auth.middleware.js";
+import { optionalAuth, requireAuth } from "../../auth/middleware/auth.middleware.js";
 import {
   cancelRequestHandler,
   deleteRequestHandler,
@@ -27,8 +27,8 @@ router.get("/categories", listCategoriesHandler);
 router.get("/locations", listLocationsHandler);
 
 router.post("/items", requireAuth, createItemHandler);
-router.get("/items", listItemsHandler);
-router.get("/items/:id", getItemHandler);
+router.get("/items", optionalAuth, listItemsHandler);
+router.get("/items/:id", optionalAuth, getItemHandler);
 router.get("/me/items", requireAuth, listMyItemsHandler);
 router.patch("/items/:id", requireAuth, updateItemHandler);
 router.delete("/items/:id", requireAuth, deleteItemHandler);

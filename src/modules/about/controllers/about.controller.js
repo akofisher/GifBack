@@ -18,7 +18,11 @@ import {
 export const createAboutEntryHandler = async (req, res, next) => {
   try {
     const payload = createAboutSchema.parse(req.body);
-    const entry = await createAboutEntry({ userId: req.user.id, payload });
+    const entry = await createAboutEntry({
+      userId: req.user.id,
+      payload,
+      locale: req.locale,
+    });
     res.status(201).json({ success: true, entry });
   } catch (err) {
     next(err);
@@ -27,7 +31,7 @@ export const createAboutEntryHandler = async (req, res, next) => {
 
 export const getAdminAboutEntryHandler = async (req, res, next) => {
   try {
-    const entry = await getAboutEntryForAdmin();
+    const entry = await getAboutEntryForAdmin(req.locale);
     res.status(200).json({ success: true, entry });
   } catch (err) {
     next(err);
@@ -45,6 +49,7 @@ export const updateAboutEntryHandler = async (req, res, next) => {
       userId: req.user.id,
       payload,
       hasSocialLinks,
+      locale: req.locale,
     });
     res.status(200).json({ success: true, entry });
   } catch (err) {
@@ -63,10 +68,14 @@ export const deleteAboutEntryHandler = async (req, res, next) => {
 
 export const getAboutEntryHandler = async (req, res, next) => {
   try {
-    const entry = await getAboutEntry();
+    const entry = await getAboutEntry(req.locale);
+    res.vary("Accept-Language");
+    res.vary("X-Language");
+    res.vary("X-Lang");
     const lastModified = entry?.updatedAt || entry?.createdAt || null;
     const etag = buildWeakEtag({
       resource: "about",
+      locale: req.locale,
       id: entry?._id || null,
       updatedAt: entry?.updatedAt || null,
     });

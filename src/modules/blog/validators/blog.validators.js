@@ -18,12 +18,22 @@ const parseBooleanQuery = z.preprocess((value) => {
   }
   return value;
 }, z.boolean().optional());
+const translationsSchema = z
+  .record(z.string().trim().min(1), z.string().trim().min(1).max(10000))
+  .optional();
 
 export const adminCreateBlogSchema = z.object({
   title: z.string().trim().min(1).max(200),
+  titleTranslations: z
+    .record(z.string().trim().min(1), z.string().trim().min(1).max(260))
+    .optional(),
   slug: z.string().trim().min(1).max(200).optional(),
   summary: z.string().trim().max(500).optional(),
+  summaryTranslations: z
+    .record(z.string().trim().min(1), z.string().trim().min(1).max(800))
+    .optional(),
   content: z.string().trim().min(1),
+  contentTranslations: translationsSchema,
   link: z.union([z.string().trim().url(), z.literal("")]).optional(),
   images: z.array(imageSchema).optional(),
   coverImage: imageSchema.optional(),
@@ -46,9 +56,16 @@ export const adminCreateBlogSchema = z.object({
 export const adminUpdateBlogSchema = z
   .object({
     title: z.string().trim().min(1).max(200).optional(),
+    titleTranslations: z
+      .record(z.string().trim().min(1), z.string().trim().min(1).max(260))
+      .optional(),
     slug: z.string().trim().min(1).max(200).optional(),
     summary: z.string().trim().max(500).optional(),
+    summaryTranslations: z
+      .record(z.string().trim().min(1), z.string().trim().min(1).max(800))
+      .optional(),
     content: z.string().trim().min(1).optional(),
+    contentTranslations: translationsSchema,
     link: z.union([z.string().trim().url(), z.literal("")]).optional(),
     images: z.array(imageSchema).optional(),
     coverImage: imageSchema.nullable().optional(),

@@ -18,6 +18,11 @@ import aboutRoutes from "./modules/about/routes/about.routes.js";
 import appVersionRoutes from "./modules/app-update/routes/app-version.routes.js";
 import agreementRoutes from "./modules/agreement/routes/agreement.routes.js";
 import donationRoutes from "./modules/donation/routes/donation.routes.js";
+import observabilityRoutes from "./modules/observability/routes/observability.routes.js";
+import { requestContextMiddleware } from "./middlewares/request-context.middleware.js";
+import { responseCaptureMiddleware } from "./middlewares/response-capture.middleware.js";
+import { requestMetricsMiddleware } from "./middlewares/request-metrics.middleware.js";
+import { adminAuditMiddleware } from "./middlewares/admin-audit.middleware.js";
 
 
 
@@ -25,6 +30,7 @@ const app = express();
 app.set("trust proxy", 1);
 
 app.use(helmet());
+app.use(requestContextMiddleware);
 
 const corsOptions = {
   origin: [
@@ -44,6 +50,9 @@ app.use(
 app.use(express.json());
 app.use(cookieParser());
 app.use(localeMiddleware);
+app.use(responseCaptureMiddleware);
+app.use(requestMetricsMiddleware);
+app.use(adminAuditMiddleware);
 
 app.use(
   rateLimit({
@@ -76,6 +85,7 @@ app.use("/api", aboutRoutes);
 app.use("/api", appVersionRoutes);
 app.use("/api", agreementRoutes);
 app.use("/api", donationRoutes);
+app.use("/api", observabilityRoutes);
 
 app.use((req, res, next) => {
   next(notFound("Route not found", "ROUTE_NOT_FOUND"));

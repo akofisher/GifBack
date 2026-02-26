@@ -14,6 +14,7 @@ const socialLinkSchema = new mongoose.Schema(
   {
     key: { type: String, required: true, trim: true },
     label: { type: String, default: "", trim: true },
+    labelTranslations: { type: Map, of: String, default: {} },
     url: { type: String, required: true, trim: true },
   },
   { _id: false }
@@ -22,7 +23,9 @@ const socialLinkSchema = new mongoose.Schema(
 const extraFieldSchema = new mongoose.Schema(
   {
     key: { type: String, required: true, trim: true },
+    keyTranslations: { type: Map, of: String, default: {} },
     value: { type: String, default: "", trim: true },
+    valueTranslations: { type: Map, of: String, default: {} },
   },
   { _id: false }
 );
@@ -31,8 +34,11 @@ const aboutSchema = new mongoose.Schema(
   {
     key: { type: String, default: "ABOUT_US", index: true },
     title: { type: String, required: true, trim: true },
+    titleTranslations: { type: Map, of: String, default: {} },
     subTitle: { type: String, default: "", trim: true },
+    subTitleTranslations: { type: Map, of: String, default: {} },
     description: { type: String, required: true, trim: true },
+    descriptionTranslations: { type: Map, of: String, default: {} },
 
     facebookLink: { type: String, default: "", trim: true },
     instagramLink: { type: String, default: "", trim: true },

@@ -38,6 +38,30 @@ export const requireAuth = async (req, res, next) => {
   }
 };
 
+export const optionalAuth = async (req, res, next) => {
+  try {
+    const header = req.headers.authorization || "";
+    const token = header.startsWith("Bearer ") ? header.slice(7) : null;
+
+    if (!token) {
+      return next();
+    }
+
+    const payload = jwt.verify(token, process.env.JWT_SECRET);
+    await ensureSessionActive(payload);
+    req.user = {
+      id: payload.id,
+      role: payload.role,
+      sid: payload.sid || null,
+      lang: payload.lang || "en",
+    };
+
+    return next();
+  } catch (_err) {
+    return next();
+  }
+};
+
 export const protect = async (req, res, next) => {
   try {
     const header = req.headers.authorization || "";

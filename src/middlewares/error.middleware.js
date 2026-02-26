@@ -89,9 +89,11 @@ const normalizeError = (err) => {
 export const errorHandler = (err, req, res, next) => {
   const normalized = normalizeError(err);
   const status = normalized.status || 500;
+  const requestId = req?.requestId || null;
 
   if (status >= 500) {
-    logger.error({ err }, "Unhandled error");
+    const boundLogger = req?.log || logger;
+    boundLogger.error({ err, requestId }, "Unhandled error");
   }
 
   const payload = {
@@ -99,6 +101,10 @@ export const errorHandler = (err, req, res, next) => {
     message: normalized.message,
     code: normalized.code,
   };
+
+  if (requestId) {
+    payload.requestId = requestId;
+  }
 
   if (normalized.details && normalized.details.length) {
     payload.errors = normalized.details;

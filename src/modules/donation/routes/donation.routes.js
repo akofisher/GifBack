@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { requireAuth } from "../../auth/middleware/auth.middleware.js";
-import { requireAdmin } from "../../admin/middleware/admin.middleware.js";
+import { requirePermission } from "../../admin/middleware/admin.middleware.js";
+import { ADMIN_PERMISSIONS } from "../../admin/rbac/rbac.js";
 import {
   getAdminDonationsHandler,
   getPublicDonationsHandler,
@@ -11,11 +12,16 @@ const router = Router();
 
 router.get("/donations", getPublicDonationsHandler);
 
-router.get("/admin/donations", requireAuth, requireAdmin, getAdminDonationsHandler);
+router.get(
+  "/admin/donations",
+  requireAuth,
+  requirePermission(ADMIN_PERMISSIONS.DONATIONS_MANAGE),
+  getAdminDonationsHandler
+);
 router.patch(
   "/admin/donations",
   requireAuth,
-  requireAdmin,
+  requirePermission(ADMIN_PERMISSIONS.DONATIONS_MANAGE),
   updateAdminDonationsHandler
 );
 

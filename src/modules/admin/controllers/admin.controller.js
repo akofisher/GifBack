@@ -10,10 +10,12 @@ import {
   deleteUserByAdmin,
   getAdminItemById,
   getAdminStats,
+  listAdminStaff,
   listAdminCategories,
   listAdminLocations,
   listAdminItems,
   listAdminUsers,
+  registerAdminStaff,
   setUserBlockedState,
   updateAdminLocationCity,
   updateAdminLocationCountry,
@@ -25,8 +27,10 @@ import {
   adminCreateCategorySchema,
   adminCreateLocationCitySchema,
   adminCreateLocationCountrySchema,
+  adminListStaffQuerySchema,
   adminListItemsQuerySchema,
   adminListUsersQuerySchema,
+  adminRegisterStaffSchema,
   adminUpdateLocationCitySchema,
   adminUpdateLocationCountrySchema,
   adminUpdateCategorySchema,
@@ -67,7 +71,7 @@ export const getAdminTopGivenLeaderboardHandler = async (req, res, next) => {
 export const listAdminUsersHandler = async (req, res, next) => {
   try {
     const query = adminListUsersQuerySchema.parse(req.query || {});
-    const result = await listAdminUsers(query);
+    const result = await listAdminUsers(query, req.user.role);
     res.status(200).json({
       success: true,
       data: {
@@ -86,6 +90,7 @@ export const setAdminUserBlockedStateHandler = async (req, res, next) => {
     const payload = adminUserToggleSchema.parse(req.body);
     const user = await setUserBlockedState({
       adminId: req.user.id,
+      actorRole: req.user.role,
       targetUserId: req.params.id,
       isActive: payload.isActive,
     });
@@ -107,9 +112,37 @@ export const deleteAdminUserHandler = async (req, res, next) => {
   }
 };
 
+export const listAdminStaffHandler = async (req, res, next) => {
+  try {
+    const query = adminListStaffQuerySchema.parse(req.query || {});
+    const result = await listAdminStaff(query);
+    res.status(200).json({
+      success: true,
+      data: {
+        items: result.users,
+        pagination: result.pagination,
+      },
+      users: result.users,
+      pagination: result.pagination,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const registerAdminStaffHandler = async (req, res, next) => {
+  try {
+    const payload = adminRegisterStaffSchema.parse(req.body);
+    const user = await registerAdminStaff(payload);
+    res.status(201).json({ success: true, user });
+  } catch (err) {
+    next(err);
+  }
+};
+
 export const listAdminCategoriesHandler = async (req, res, next) => {
   try {
-    const categories = await listAdminCategories();
+    const categories = await listAdminCategories({ locale: req.locale });
     res.status(200).json({ success: true, categories });
   } catch (err) {
     next(err);
@@ -119,7 +152,7 @@ export const listAdminCategoriesHandler = async (req, res, next) => {
 export const createAdminCategoryHandler = async (req, res, next) => {
   try {
     const payload = adminCreateCategorySchema.parse(req.body);
-    const category = await createAdminCategory(payload);
+    const category = await createAdminCategory(payload, { locale: req.locale });
     res.status(201).json({ success: true, category });
   } catch (err) {
     next(err);
@@ -129,7 +162,9 @@ export const createAdminCategoryHandler = async (req, res, next) => {
 export const updateAdminCategoryHandler = async (req, res, next) => {
   try {
     const payload = adminUpdateCategorySchema.parse(req.body);
-    const category = await updateAdminCategory(req.params.id, payload);
+    const category = await updateAdminCategory(req.params.id, payload, {
+      locale: req.locale,
+    });
     res.status(200).json({ success: true, category });
   } catch (err) {
     next(err);
@@ -147,7 +182,7 @@ export const deleteAdminCategoryHandler = async (req, res, next) => {
 
 export const listAdminLocationsHandler = async (req, res, next) => {
   try {
-    const countries = await listAdminLocations();
+    const countries = await listAdminLocations({ locale: req.locale });
     res.status(200).json({ success: true, countries });
   } catch (err) {
     next(err);
@@ -157,7 +192,9 @@ export const listAdminLocationsHandler = async (req, res, next) => {
 export const createAdminLocationCountryHandler = async (req, res, next) => {
   try {
     const payload = adminCreateLocationCountrySchema.parse(req.body);
-    const country = await createAdminLocationCountry(payload);
+    const country = await createAdminLocationCountry(payload, {
+      locale: req.locale,
+    });
     res.status(201).json({ success: true, country });
   } catch (err) {
     next(err);
@@ -167,7 +204,9 @@ export const createAdminLocationCountryHandler = async (req, res, next) => {
 export const updateAdminLocationCountryHandler = async (req, res, next) => {
   try {
     const payload = adminUpdateLocationCountrySchema.parse(req.body);
-    const country = await updateAdminLocationCountry(req.params.countryId, payload);
+    const country = await updateAdminLocationCountry(req.params.countryId, payload, {
+      locale: req.locale,
+    });
     res.status(200).json({ success: true, country });
   } catch (err) {
     next(err);
@@ -186,7 +225,9 @@ export const deleteAdminLocationCountryHandler = async (req, res, next) => {
 export const createAdminLocationCityHandler = async (req, res, next) => {
   try {
     const payload = adminCreateLocationCitySchema.parse(req.body);
-    const country = await createAdminLocationCity(req.params.countryId, payload);
+    const country = await createAdminLocationCity(req.params.countryId, payload, {
+      locale: req.locale,
+    });
     res.status(201).json({ success: true, country });
   } catch (err) {
     next(err);
@@ -199,7 +240,8 @@ export const updateAdminLocationCityHandler = async (req, res, next) => {
     const country = await updateAdminLocationCity(
       req.params.countryId,
       req.params.cityId,
-      payload
+      payload,
+      { locale: req.locale }
     );
     res.status(200).json({ success: true, country });
   } catch (err) {
@@ -211,7 +253,8 @@ export const deleteAdminLocationCityHandler = async (req, res, next) => {
   try {
     const country = await deleteAdminLocationCity(
       req.params.countryId,
-      req.params.cityId
+      req.params.cityId,
+      { locale: req.locale }
     );
     res.status(200).json({ success: true, country });
   } catch (err) {

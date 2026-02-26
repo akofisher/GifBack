@@ -1,6 +1,11 @@
 import mongoose from "mongoose";
 import { badRequest, notFound } from "../../../utils/appError.js";
 import Blog from "../models/blog.model.js";
+import {
+  normalizeTranslationsInput,
+  resolveLocalizedText,
+  toPlainTranslations,
+} from "../../../i18n/content.js";
 
 const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -73,7 +78,7 @@ const ensureBlogHasRenderableMedia = ({ link, images, coverImage }) => {
   ]);
 };
 
-const formatBlog = (blog) => {
+const formatBlog = (blog, locale = "en") => {
   if (!blog) return null;
   const author =
     blog.authorId && typeof blog.authorId === "object" ? blog.authorId : null;
@@ -85,9 +90,30 @@ const formatBlog = (blog) => {
         ? [blog.coverImage]
         : [];
   const coverImage = blog.coverImage || images[0] || null;
+  const titleTranslations = toPlainTranslations(blog.titleTranslations);
+  const summaryTranslations = toPlainTranslations(blog.summaryTranslations);
+  const contentTranslations = toPlainTranslations(blog.contentTranslations);
 
   return {
     ...blog,
+    title: resolveLocalizedText({
+      locale,
+      baseValue: blog.title || "",
+      translations: titleTranslations,
+    }),
+    titleTranslations,
+    summary: resolveLocalizedText({
+      locale,
+      baseValue: blog.summary || "",
+      translations: summaryTranslations,
+    }),
+    summaryTranslations,
+    content: resolveLocalizedText({
+      locale,
+      baseValue: blog.content || "",
+      translations: contentTranslations,
+    }),
+    contentTranslations,
     images,
     coverImage,
     authorId: author?._id?.toString?.() || blog.authorId || null,
@@ -103,15 +129,15 @@ const formatBlog = (blog) => {
   };
 };
 
-const findBlogForAdmin = async (id) => {
+const findBlogForAdmin = async (id, locale = "en") => {
   const blog = await Blog.findById(id)
     .populate({ path: "authorId", select: "firstName lastName" })
     .lean();
   if (!blog) throw notFound("Blog not found", "BLOG_NOT_FOUND");
-  return formatBlog(blog);
+  return formatBlog(blog, locale);
 };
 
-const findPublishedBlog = async (idOrSlug) => {
+const findPublishedBlog = async (idOrSlug, locale = "en") => {
   let filter;
   if (mongoose.Types.ObjectId.isValid(idOrSlug)) {
     filter = { _id: idOrSlug, isPublished: true };
@@ -123,7 +149,7 @@ const findPublishedBlog = async (idOrSlug) => {
     .populate({ path: "authorId", select: "firstName lastName" })
     .lean();
   if (!blog) throw notFound("Blog not found", "BLOG_NOT_FOUND");
-  return formatBlog(blog);
+  return formatBlog(blog, locale);
 };
 
 const ensureUniqueSlug = async ({ title, requestedSlug, excludeId = null }) => {
@@ -144,7 +170,7 @@ const ensureUniqueSlug = async ({ title, requestedSlug, excludeId = null }) => {
   }
 };
 
-export const createBlogByAdmin = async ({ authorId, payload }) => {
+export const createBlogByAdmin = async ({ authorId, payload, locale = "en" }) => {
   const slug = await ensureUniqueSlug({
     title: payload.title,
     requestedSlug: payload.slug,
@@ -164,9 +190,12 @@ export const createBlogByAdmin = async ({ authorId, payload }) => {
   const [created] = await Blog.create([
     {
       title: payload.title.trim(),
+      titleTranslations: normalizeTranslationsInput(payload.titleTranslations),
       slug,
       summary: payload.summary?.trim() || "",
+      summaryTranslations: normalizeTranslationsInput(payload.summaryTranslations),
       content: payload.content.trim(),
+      contentTranslations: normalizeTranslationsInput(payload.contentTranslations),
       link: payload.link || "",
       images: normalizedImages.images,
       coverImage: normalizedImages.coverImage,
@@ -177,10 +206,10 @@ export const createBlogByAdmin = async ({ authorId, payload }) => {
     },
   ]);
 
-  return findBlogForAdmin(created._id);
+  return findBlogForAdmin(created._id, locale);
 };
 
-export const listBlogsForAdmin = async (query) => {
+export const listBlogsForAdmin = async (query, locale = "en") => {
   const filter = {};
   if (typeof query.isPublished === "boolean") filter.isPublished = query.isPublished;
   if (query.search) {
@@ -204,22 +233,31 @@ export const listBlogsForAdmin = async (query) => {
   ]);
 
   return {
-    blogs: rows.map(formatBlog),
+    blogs: rows.map((blog) => formatBlog(blog, locale)),
     pagination: buildPagination({ page, limit, total }),
   };
 };
 
-export const getBlogForAdmin = async (blogId) => {
-  return findBlogForAdmin(blogId);
+export const getBlogForAdmin = async (blogId, locale = "en") => {
+  return findBlogForAdmin(blogId, locale);
 };
 
-export const updateBlogByAdmin = async ({ blogId, payload }) => {
+export const updateBlogByAdmin = async ({ blogId, payload, locale = "en" }) => {
   const blog = await Blog.findById(blogId);
   if (!blog) throw notFound("Blog not found", "BLOG_NOT_FOUND");
 
   if (payload.title !== undefined) blog.title = payload.title.trim();
+  if (payload.titleTranslations !== undefined) {
+    blog.titleTranslations = normalizeTranslationsInput(payload.titleTranslations);
+  }
   if (payload.summary !== undefined) blog.summary = payload.summary.trim();
+  if (payload.summaryTranslations !== undefined) {
+    blog.summaryTranslations = normalizeTranslationsInput(payload.summaryTranslations);
+  }
   if (payload.content !== undefined) blog.content = payload.content.trim();
+  if (payload.contentTranslations !== undefined) {
+    blog.contentTranslations = normalizeTranslationsInput(payload.contentTranslations);
+  }
   if (payload.link !== undefined) blog.link = payload.link;
   if (payload.images !== undefined || payload.coverImage !== undefined) {
     const normalizedImages = normalizeImages({
@@ -256,7 +294,7 @@ export const updateBlogByAdmin = async ({ blogId, payload }) => {
   }
 
   await blog.save();
-  return findBlogForAdmin(blog._id);
+  return findBlogForAdmin(blog._id, locale);
 };
 
 export const deleteBlogByAdmin = async (blogId) => {
@@ -267,7 +305,7 @@ export const deleteBlogByAdmin = async (blogId) => {
   return { deleted: true, id: blog._id.toString() };
 };
 
-export const listPublishedBlogs = async (query) => {
+export const listPublishedBlogs = async (query, locale = "en") => {
   const filter = { isPublished: true };
   if (query.search) {
     const regex = new RegExp(escapeRegex(query.search), "i");
@@ -290,11 +328,11 @@ export const listPublishedBlogs = async (query) => {
   ]);
 
   return {
-    blogs: rows.map(formatBlog),
+    blogs: rows.map((blog) => formatBlog(blog, locale)),
     pagination: buildPagination({ page, limit, total }),
   };
 };
 
-export const getPublishedBlog = async (idOrSlug) => {
-  return findPublishedBlog(idOrSlug);
+export const getPublishedBlog = async (idOrSlug, locale = "en") => {
+  return findPublishedBlog(idOrSlug, locale);
 };

@@ -14,9 +14,12 @@ const imageSchema = new mongoose.Schema(
 const blogSchema = new mongoose.Schema(
   {
     title: { type: String, required: true, trim: true },
+    titleTranslations: { type: Map, of: String, default: {} },
     slug: { type: String, required: true, trim: true, unique: true, index: true },
     summary: { type: String, trim: true, default: "" },
+    summaryTranslations: { type: Map, of: String, default: {} },
     content: { type: String, required: true, trim: true },
+    contentTranslations: { type: Map, of: String, default: {} },
     link: { type: String, default: "", trim: true },
     images: { type: [imageSchema], default: [] },
     coverImage: { type: imageSchema, default: null },

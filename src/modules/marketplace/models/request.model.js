@@ -19,6 +19,12 @@ const itemRequestSchema = new mongoose.Schema(
 
     message: { type: String, trim: true, default: "" },
 
+    cancellationReason: {
+      type: String,
+      enum: ["AUTO_CANCELED_CONFLICT"],
+      default: null,
+    },
+
     itemSnapshot: {
       title: { type: String, default: "" },
       imageUrl: { type: String, default: "" },
@@ -42,6 +48,16 @@ const itemRequestSchema = new mongoose.Schema(
 );
 
 itemRequestSchema.index({ itemId: 1, status: 1 });
+itemRequestSchema.index({ status: 1, itemId: 1 });
+itemRequestSchema.index({ status: 1, offeredItemId: 1 });
+itemRequestSchema.index({ requesterId: 1, itemId: 1, status: 1 });
+itemRequestSchema.index(
+  { requesterId: 1, itemId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { status: { $in: ["PENDING", "APPROVED"] } },
+  }
+);
 itemRequestSchema.index({ ownerId: 1, status: 1, createdAt: -1 });
 itemRequestSchema.index({ requesterId: 1, status: 1, createdAt: -1 });
 

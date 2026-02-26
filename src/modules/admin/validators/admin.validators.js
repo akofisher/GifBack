@@ -1,6 +1,9 @@
 import { z } from "zod";
 
 const objectIdSchema = z.string().regex(/^[a-fA-F0-9]{24}$/, "Invalid id");
+const translationsSchema = z
+  .record(z.string().trim().min(1), z.string().trim().min(1).max(160))
+  .optional();
 
 const parseBooleanQuery = z.preprocess((value) => {
   if (value === undefined) return undefined;
@@ -62,12 +65,14 @@ export const adminUpdateItemSchema = z
 
 export const adminCreateCategorySchema = z.object({
   name: z.string().trim().min(1).max(120),
+  nameTranslations: translationsSchema,
   order: z.coerce.number().int().min(0).default(0),
   isActive: z.boolean().default(true),
 });
 
 export const adminCreateLocationCountrySchema = z.object({
   name: z.string().trim().min(1).max(120),
+  nameTranslations: translationsSchema,
   localName: z.string().trim().max(120).optional(),
   code: z.string().trim().min(2).max(10),
   order: z.coerce.number().int().min(0).default(0),
@@ -77,6 +82,7 @@ export const adminCreateLocationCountrySchema = z.object({
 export const adminUpdateLocationCountrySchema = z
   .object({
     name: z.string().trim().min(1).max(120).optional(),
+    nameTranslations: translationsSchema,
     localName: z.string().trim().max(120).optional(),
     code: z.string().trim().min(2).max(10).optional(),
     order: z.coerce.number().int().min(0).optional(),
@@ -88,6 +94,7 @@ export const adminUpdateLocationCountrySchema = z
 
 export const adminCreateLocationCitySchema = z.object({
   name: z.string().trim().min(1).max(120),
+  nameTranslations: translationsSchema,
   localName: z.string().trim().max(120).optional(),
   order: z.coerce.number().int().min(0).default(0),
   isActive: z.boolean().default(true),
@@ -96,6 +103,7 @@ export const adminCreateLocationCitySchema = z.object({
 export const adminUpdateLocationCitySchema = z
   .object({
     name: z.string().trim().min(1).max(120).optional(),
+    nameTranslations: translationsSchema,
     localName: z.string().trim().max(120).optional(),
     order: z.coerce.number().int().min(0).optional(),
     isActive: z.boolean().optional(),
@@ -107,6 +115,7 @@ export const adminUpdateLocationCitySchema = z
 export const adminUpdateCategorySchema = z
   .object({
     name: z.string().trim().min(1).max(120).optional(),
+    nameTranslations: translationsSchema,
     order: z.coerce.number().int().min(0).optional(),
     isActive: z.boolean().optional(),
   })
@@ -116,7 +125,7 @@ export const adminUpdateCategorySchema = z
 
 export const adminListUsersQuerySchema = z.object({
   search: z.string().trim().max(120).optional(),
-  role: z.string().trim().max(50).optional(),
+  role: z.enum(["user", "admin", "super_admin"]).optional(),
   isActive: parseBooleanQuery,
   page: z.coerce.number().int().min(1).optional(),
   limit: z.coerce.number().int().min(1).max(100).optional(),
@@ -125,4 +134,28 @@ export const adminListUsersQuerySchema = z.object({
 
 export const adminUserToggleSchema = z.object({
   isActive: z.boolean(),
+});
+
+export const adminListStaffQuerySchema = z.object({
+  search: z.string().trim().max(120).optional(),
+  role: z.enum(["admin", "super_admin"]).optional(),
+  isActive: parseBooleanQuery,
+  page: z.coerce.number().int().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+  sort: z.string().trim().max(50).optional(),
+});
+
+export const adminRegisterStaffSchema = z.object({
+  firstName: z.string().trim().min(1).max(50),
+  lastName: z.string().trim().min(1).max(50),
+  email: z.string().trim().email(),
+  phone: z.string().trim().min(6).max(30).optional(),
+  preferredLanguage: z.enum(["en", "ka"]).optional(),
+  password: z
+    .string()
+    .min(8)
+    .max(100)
+    .regex(/[A-Z]/, "Password must contain at least one uppercase letter")
+    .regex(/[a-z]/, "Password must contain at least one lowercase letter")
+    .regex(/[0-9]/, "Password must contain at least one digit"),
 });

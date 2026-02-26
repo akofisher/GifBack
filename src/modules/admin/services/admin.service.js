@@ -1,14 +1,29 @@
 import mongoose from "mongoose";
+import bcrypt from "bcrypt";
 import { conflict, forbidden, notFound } from "../../../utils/appError.js";
 import { deleteChatsByRequestIds } from "../../chat/services/chat.service.js";
 import Session from "../../auth/models/session.model.js";
 import User from "../../user/models/user.model.js";
+import { normalizeLanguage } from "../../../i18n/localization.js";
+import {
+  normalizeTranslationsInput,
+  resolveLocalizedText,
+  toPlainTranslations,
+} from "../../../i18n/content.js";
 import Category from "../../marketplace/models/category.model.js";
 import Location from "../../marketplace/models/location.model.js";
 import Item from "../../marketplace/models/item.model.js";
 import ItemRequest from "../../marketplace/models/request.model.js";
 import Notification from "../../marketplace/models/notification.model.js";
 import ProductReport from "../../reports/models/product-report.model.js";
+import { createMarketplaceEvents } from "../../marketplace/services/event-log.service.js";
+import {
+  canManageTargetRole,
+  getRolePermissions,
+  isSuperAdminRole,
+  normalizeRole,
+  ROLE,
+} from "../rbac/rbac.js";
 
 const buildSort = (sort) => {
   if (sort === "createdAt_asc") return { createdAt: 1, _id: 1 };
@@ -43,6 +58,7 @@ const normalizeCountry = (country) => {
   return {
     id: country._id?.toString?.() || "",
     name: country.name || "",
+    nameTranslations: toPlainTranslations(country.nameTranslations),
     localName: country.localName || "",
     code: country.code || "",
     isActive: Boolean(country.isActive),
@@ -55,6 +71,7 @@ const normalizeCity = (city) => {
   return {
     id: city._id?.toString?.() || "",
     name: city.name || "",
+    nameTranslations: toPlainTranslations(city.nameTranslations),
     localName: city.localName || "",
     isActive: Boolean(city.isActive),
     order: Number(city.order || 0),
@@ -73,6 +90,49 @@ const formatCountryWithCities = (country) => ({
   ...normalizeCountry(country),
   cities: sortCityRows(country.cities || []).map(normalizeCity),
 });
+
+const resolveLocalizedLocationName = ({ locale, name, nameTranslations, localName }) =>
+  resolveLocalizedText({
+    locale,
+    baseValue: name,
+    translations: nameTranslations,
+    fallbackValue: normalizeLanguage(locale) === "ka" ? localName : "",
+  });
+
+const formatCategory = (category, locale = "en") => {
+  const translations = toPlainTranslations(category.nameTranslations);
+  return {
+    ...category,
+    name: resolveLocalizedText({
+      locale,
+      baseValue: category.name,
+      translations,
+    }),
+    nameTranslations: translations,
+  };
+};
+
+const formatLocationCountry = (country, locale = "en") => {
+  const base = formatCountryWithCities(country);
+  return {
+    ...base,
+    name: resolveLocalizedLocationName({
+      locale,
+      name: base.name,
+      nameTranslations: base.nameTranslations,
+      localName: base.localName,
+    }),
+    cities: (base.cities || []).map((city) => ({
+      ...city,
+      name: resolveLocalizedLocationName({
+        locale,
+        name: city.name,
+        nameTranslations: city.nameTranslations,
+        localName: city.localName,
+      }),
+    })),
+  };
+};
 
 const extractItemLocation = (item) => {
   const country =
@@ -151,7 +211,8 @@ const toSafeUser = (user) => ({
   email: user.email || "",
   emailVerified: Boolean(user.emailVerified),
   phone: user.phone || "",
-  role: user.role || "user",
+  role: normalizeRole(user.role),
+  permissions: getRolePermissions(user.role),
   isActive: Boolean(user.isActive),
   avatar: user.avatar || null,
   stats: user.stats || {},
@@ -189,6 +250,7 @@ const cleanupRequestsForDeletedItem = async ({ item, actorId, session }) => {
   const pendingCountByTargetItem = new Map();
   const counterpartReservations = [];
   const notifications = [];
+  const events = [];
 
   for (const request of activeRequests) {
     const isTargetItem = request.itemId?.toString() === itemId;
@@ -248,6 +310,19 @@ const cleanupRequestsForDeletedItem = async ({ item, actorId, session }) => {
         offeredItemId: request.offeredItemId || null,
       }
     );
+
+    events.push({
+      type: nextStatus === "EXPIRED" ? "REQUEST_EXPIRED" : "REQUEST_CANCELED",
+      actorId,
+      requestId: request._id,
+      itemId: request.itemId || null,
+      offeredItemId: request.offeredItemId || null,
+      ownerId: request.ownerId,
+      requesterId: request.requesterId,
+      metadata: {
+        source: "ADMIN_ITEM_DELETE",
+      },
+    });
   }
 
   await ItemRequest.bulkWrite(bulkOps, { session });
@@ -289,6 +364,7 @@ const cleanupRequestsForDeletedItem = async ({ item, actorId, session }) => {
   }
 
   await createNotifications(notifications, session);
+  await createMarketplaceEvents(events, session);
 };
 
 const findAdminItemById = async (itemId, session = null) => {
@@ -305,6 +381,12 @@ export const getAdminStats = async () => {
   const [
     usersTotal,
     usersActive,
+    appUsersTotal,
+    appUsersActive,
+    staffTotal,
+    staffActive,
+    adminTotal,
+    superAdminTotal,
     productsTotal,
     reportsTotal,
     reportsOpen,
@@ -320,6 +402,12 @@ export const getAdminStats = async () => {
   ] = await Promise.all([
     User.countDocuments(),
     User.countDocuments({ isActive: true }),
+    User.countDocuments({ role: "user" }),
+    User.countDocuments({ role: "user", isActive: true }),
+    User.countDocuments({ role: { $in: ["admin", "super_admin"] } }),
+    User.countDocuments({ role: { $in: ["admin", "super_admin"] }, isActive: true }),
+    User.countDocuments({ role: "admin" }),
+    User.countDocuments({ role: "super_admin" }),
     Item.countDocuments(),
     ProductReport.countDocuments(),
     ProductReport.countDocuments({ status: "OPEN" }),
@@ -339,6 +427,18 @@ export const getAdminStats = async () => {
       total: usersTotal,
       active: usersActive,
       blocked: usersTotal - usersActive,
+      app: {
+        total: appUsersTotal,
+        active: appUsersActive,
+        blocked: appUsersTotal - appUsersActive,
+      },
+      staff: {
+        total: staffTotal,
+        active: staffActive,
+        blocked: staffTotal - staffActive,
+        admins: adminTotal,
+        superAdmins: superAdminTotal,
+      },
     },
     products: {
       total: productsTotal,
@@ -365,9 +465,28 @@ export const getAdminStats = async () => {
   };
 };
 
-export const listAdminUsers = async (query) => {
+export const listAdminUsers = async (query, actorRole = ROLE.ADMIN) => {
   const filter = {};
-  if (query.role) filter.role = query.role;
+  const normalizedActorRole = normalizeRole(actorRole);
+
+  if (query.role) {
+    filter.role = query.role;
+  }
+
+  if (!isSuperAdminRole(normalizedActorRole)) {
+    if (query.role && query.role !== ROLE.USER) {
+      return {
+        users: [],
+        pagination: buildPagination({
+          page: query.page ?? 1,
+          limit: query.limit ?? 20,
+          total: 0,
+        }),
+      };
+    }
+    filter.role = ROLE.USER;
+  }
+
   if (typeof query.isActive === "boolean") filter.isActive = query.isActive;
   if (query.search) {
     const escaped = query.search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -407,8 +526,102 @@ export const listAdminUsers = async (query) => {
   };
 };
 
+export const listAdminStaff = async (query) => {
+  const filter = {
+    role: { $in: [ROLE.ADMIN, ROLE.SUPER_ADMIN] },
+  };
+
+  if (query.role) {
+    filter.role = query.role;
+  }
+  if (typeof query.isActive === "boolean") {
+    filter.isActive = query.isActive;
+  }
+  if (query.search) {
+    const escaped = query.search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const regex = new RegExp(escaped, "i");
+    filter.$or = [
+      { firstName: regex },
+      { lastName: regex },
+      { email: regex },
+      { phone: regex },
+    ];
+  }
+
+  const sort = buildSort(query.sort);
+  const usePagination =
+    Number.isInteger(query.page) && Number.isInteger(query.limit);
+  const page = usePagination ? query.page : 1;
+  const limit = usePagination ? query.limit : 0;
+  const skip = usePagination ? (page - 1) * limit : 0;
+
+  const [rows, total] = await Promise.all([
+    User.find(filter)
+      .sort(sort)
+      .skip(skip)
+      .limit(limit)
+      .select("-password")
+      .lean(),
+    User.countDocuments(filter),
+  ]);
+
+  return {
+    users: rows.map(toSafeUser),
+    pagination: buildPagination({
+      page,
+      limit: usePagination ? limit : Math.max(total, 1),
+      total,
+    }),
+  };
+};
+
+export const registerAdminStaff = async ({
+  firstName,
+  lastName,
+  email,
+  phone,
+  preferredLanguage,
+  password,
+}) => {
+  const normalizedEmail = email.toLowerCase().trim();
+  const normalizedPhone = typeof phone === "string" ? phone.trim() : "";
+
+  const conflicts = [];
+  if (await User.exists({ email: normalizedEmail })) {
+    conflicts.push({ field: "email", message: "Email already in use" });
+  }
+  if (normalizedPhone && (await User.exists({ phone: normalizedPhone }))) {
+    conflicts.push({ field: "phone", message: "Phone already in use" });
+  }
+  if (conflicts.length) {
+    const message =
+      conflicts.length === 1
+        ? conflicts[0].message
+        : "Email and phone already in use";
+    throw conflict(message, "DUPLICATE_CREDENTIALS", conflicts);
+  }
+
+  const hashedPassword = await bcrypt.hash(password, 12);
+
+  const user = await User.create({
+    firstName: firstName.trim(),
+    lastName: lastName.trim(),
+    email: normalizedEmail,
+    phone: normalizedPhone || undefined,
+    preferredLanguage: normalizeLanguage(preferredLanguage || "en"),
+    password: hashedPassword,
+    role: ROLE.ADMIN,
+    isActive: true,
+    emailVerified: true,
+  });
+
+  const safeUser = await User.findById(user._id).select("-password").lean();
+  return toSafeUser(safeUser);
+};
+
 export const setUserBlockedState = async ({
   adminId,
+  actorRole,
   targetUserId,
   isActive,
 }) => {
@@ -416,8 +629,21 @@ export const setUserBlockedState = async ({
     throw forbidden("You cannot change your own admin status", "ADMIN_SELF_ACTION_FORBIDDEN");
   }
 
-  const user = await User.findById(targetUserId);
+  const normalizedActorRole = normalizeRole(actorRole);
+  const user = await User.findById(targetUserId).select("role isActive");
   if (!user) throw notFound("User not found", "USER_NOT_FOUND");
+
+  if (
+    !canManageTargetRole({
+      actorRole: normalizedActorRole,
+      targetRole: user.role,
+    })
+  ) {
+    throw forbidden(
+      "You are not allowed to manage this user",
+      "ADMIN_ACTION_TARGET_FORBIDDEN"
+    );
+  }
 
   user.isActive = isActive;
   await user.save();
@@ -438,8 +664,23 @@ export const deleteUserByAdmin = async ({ adminId, targetUserId }) => {
     throw forbidden("You cannot delete your own admin account", "ADMIN_SELF_ACTION_FORBIDDEN");
   }
 
-  const user = await User.findById(targetUserId).select("_id");
+  const actor = await User.findById(adminId).select("role");
+  if (!actor) throw notFound("User not found", "USER_NOT_FOUND");
+
+  const user = await User.findById(targetUserId).select("_id role");
   if (!user) throw notFound("User not found", "USER_NOT_FOUND");
+
+  if (
+    !canManageTargetRole({
+      actorRole: actor.role,
+      targetRole: user.role,
+    })
+  ) {
+    throw forbidden(
+      "You are not allowed to manage this user",
+      "ADMIN_ACTION_TARGET_FORBIDDEN"
+    );
+  }
 
   const [activeItems, activeRequests] = await Promise.all([
     Item.countDocuments({
@@ -469,31 +710,41 @@ export const deleteUserByAdmin = async ({ adminId, targetUserId }) => {
   return { deleted: true, id: user._id.toString() };
 };
 
-export const listAdminCategories = async () => {
-  return Category.find().sort({ order: 1, name: 1 }).lean();
+export const listAdminCategories = async ({ locale = "en" } = {}) => {
+  const categories = await Category.find().sort({ order: 1, name: 1 }).lean();
+  return categories.map((category) => formatCategory(category, locale));
 };
 
-export const createAdminCategory = async (payload) => {
+export const createAdminCategory = async (payload, { locale = "en" } = {}) => {
+  const nameTranslations = normalizeTranslationsInput(payload.nameTranslations);
   const [created] = await Category.create([
     {
       name: payload.name.trim(),
+      nameTranslations,
       order: payload.order ?? 0,
       isActive: payload.isActive ?? true,
     },
   ]);
-  return created.toObject();
+  return formatCategory(created.toObject(), locale);
 };
 
-export const updateAdminCategory = async (categoryId, payload) => {
+export const updateAdminCategory = async (
+  categoryId,
+  payload,
+  { locale = "en" } = {}
+) => {
   const category = await Category.findById(categoryId);
   if (!category) throw notFound("Category not found", "CATEGORY_NOT_FOUND");
 
   if (payload.name !== undefined) category.name = payload.name.trim();
+  if (payload.nameTranslations !== undefined) {
+    category.nameTranslations = normalizeTranslationsInput(payload.nameTranslations);
+  }
   if (payload.order !== undefined) category.order = payload.order;
   if (payload.isActive !== undefined) category.isActive = payload.isActive;
 
   await category.save();
-  return category.toObject();
+  return formatCategory(category.toObject(), locale);
 };
 
 export const deleteAdminCategory = async (categoryId) => {
@@ -511,15 +762,20 @@ export const deleteAdminCategory = async (categoryId) => {
   return { deleted: true, id: category._id.toString() };
 };
 
-export const listAdminLocations = async () => {
+export const listAdminLocations = async ({ locale = "en" } = {}) => {
   const countries = await Location.find().sort({ order: 1, name: 1 }).lean();
-  return countries.map(formatCountryWithCities);
+  return countries.map((country) => formatLocationCountry(country, locale));
 };
 
-export const createAdminLocationCountry = async (payload) => {
+export const createAdminLocationCountry = async (
+  payload,
+  { locale = "en" } = {}
+) => {
+  const nameTranslations = normalizeTranslationsInput(payload.nameTranslations);
   const [created] = await Location.create([
     {
       name: payload.name.trim(),
+      nameTranslations,
       localName: payload.localName?.trim() || "",
       code: payload.code.trim().toUpperCase(),
       order: payload.order ?? 0,
@@ -528,21 +784,28 @@ export const createAdminLocationCountry = async (payload) => {
     },
   ]);
 
-  return formatCountryWithCities(created.toObject());
+  return formatLocationCountry(created.toObject(), locale);
 };
 
-export const updateAdminLocationCountry = async (countryId, payload) => {
+export const updateAdminLocationCountry = async (
+  countryId,
+  payload,
+  { locale = "en" } = {}
+) => {
   const country = await Location.findById(countryId);
   if (!country) throw notFound("Country not found", "LOCATION_COUNTRY_NOT_FOUND");
 
   if (payload.name !== undefined) country.name = payload.name.trim();
+  if (payload.nameTranslations !== undefined) {
+    country.nameTranslations = normalizeTranslationsInput(payload.nameTranslations);
+  }
   if (payload.localName !== undefined) country.localName = payload.localName.trim();
   if (payload.code !== undefined) country.code = payload.code.trim().toUpperCase();
   if (payload.order !== undefined) country.order = payload.order;
   if (payload.isActive !== undefined) country.isActive = payload.isActive;
 
   await country.save();
-  return formatCountryWithCities(country.toObject());
+  return formatLocationCountry(country.toObject(), locale);
 };
 
 export const deleteAdminLocationCountry = async (countryId) => {
@@ -560,7 +823,11 @@ export const deleteAdminLocationCountry = async (countryId) => {
   return { deleted: true, id: country._id.toString() };
 };
 
-export const createAdminLocationCity = async (countryId, payload) => {
+export const createAdminLocationCity = async (
+  countryId,
+  payload,
+  { locale = "en" } = {}
+) => {
   const country = await Location.findById(countryId);
   if (!country) throw notFound("Country not found", "LOCATION_COUNTRY_NOT_FOUND");
 
@@ -573,16 +840,22 @@ export const createAdminLocationCity = async (countryId, payload) => {
 
   country.cities.push({
     name: payload.name.trim(),
+    nameTranslations: normalizeTranslationsInput(payload.nameTranslations),
     localName: payload.localName?.trim() || "",
     order: payload.order ?? 0,
     isActive: payload.isActive ?? true,
   });
 
   await country.save();
-  return formatCountryWithCities(country.toObject());
+  return formatLocationCountry(country.toObject(), locale);
 };
 
-export const updateAdminLocationCity = async (countryId, cityId, payload) => {
+export const updateAdminLocationCity = async (
+  countryId,
+  cityId,
+  payload,
+  { locale = "en" } = {}
+) => {
   const country = await Location.findById(countryId);
   if (!country) throw notFound("Country not found", "LOCATION_COUNTRY_NOT_FOUND");
 
@@ -603,14 +876,21 @@ export const updateAdminLocationCity = async (countryId, cityId, payload) => {
   }
 
   if (payload.localName !== undefined) city.localName = payload.localName.trim();
+  if (payload.nameTranslations !== undefined) {
+    city.nameTranslations = normalizeTranslationsInput(payload.nameTranslations);
+  }
   if (payload.order !== undefined) city.order = payload.order;
   if (payload.isActive !== undefined) city.isActive = payload.isActive;
 
   await country.save();
-  return formatCountryWithCities(country.toObject());
+  return formatLocationCountry(country.toObject(), locale);
 };
 
-export const deleteAdminLocationCity = async (countryId, cityId) => {
+export const deleteAdminLocationCity = async (
+  countryId,
+  cityId,
+  { locale = "en" } = {}
+) => {
   const country = await Location.findById(countryId);
   if (!country) throw notFound("Country not found", "LOCATION_COUNTRY_NOT_FOUND");
 
@@ -626,7 +906,7 @@ export const deleteAdminLocationCity = async (countryId, cityId) => {
 
   country.cities.pull({ _id: cityId });
   await country.save();
-  return formatCountryWithCities(country.toObject());
+  return formatLocationCountry(country.toObject(), locale);
 };
 
 export const listAdminItems = async (query) => {
@@ -742,6 +1022,23 @@ export const deleteAdminItem = async ({ itemId, actorId }) => {
         session,
       });
     }
+
+    await createMarketplaceEvents(
+      [
+        {
+          type: "ITEM_DELETED",
+          actorId,
+          itemId: item._id,
+          ownerId: item.ownerId,
+          metadata: {
+            source: "ADMIN",
+            mode: item.mode,
+            status: item.status,
+          },
+        },
+      ],
+      session
+    );
 
     await Item.deleteOne({ _id: item._id }, { session });
   });

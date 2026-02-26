@@ -10,6 +10,7 @@ import {
   validateAgreementAcceptanceForRegistration,
 } from "../../agreement/services/agreement.service.js";
 import { AppError, badRequest, conflict, forbidden, notFound, unauthorized } from "../../../utils/appError.js";
+import { getRolePermissions, normalizeRole } from "../../admin/rbac/rbac.js";
 
 const ACCESS_TTL = process.env.ACCESS_TOKEN_TTL || "15m";
 const REFRESH_TTL = process.env.REFRESH_TOKEN_TTL || "365d";
@@ -95,7 +96,7 @@ const signAccessToken = (user, sessionId = null) =>
   jwt.sign(
     {
       id: user._id.toString(),
-      role: user.role,
+      role: normalizeRole(user.role),
       lang: normalizeLanguage(user.preferredLanguage),
       ...(sessionId ? { sid: sessionId.toString() } : {}),
     },
@@ -123,7 +124,8 @@ const toSafeUser = (user) => ({
   emailVerified: Boolean(user.emailVerified),
   phone: user.phone,
   preferredLanguage: normalizeLanguage(user.preferredLanguage),
-  role: user.role,
+  role: normalizeRole(user.role),
+  permissions: getRolePermissions(user.role),
   isActive: user.isActive,
   avatar: user.avatar,
   stats: user.stats,
@@ -152,6 +154,7 @@ const buildPendingRegistrationPreview = ({
   preferredLanguage: normalizeLanguage(preferredLanguage),
   emailVerified: false,
   role: "user",
+  permissions: getRolePermissions("user"),
   isActive: false,
   avatar: null,
   stats: {

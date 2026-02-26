@@ -77,6 +77,16 @@ const CODE_TRANSLATIONS = {
     AGREEMENT_VERSION_MISMATCH: "შეთანხმების ვერსია მოძველებულია",
 
     ADMIN_SELF_ACTION_FORBIDDEN: "საკუთარ ადმინისტრატორის ანგარიშზე მოქმედება აკრძალულია",
+    ADMIN_ACCESS_REQUIRED: "ადმინისტრატორის წვდომა აუცილებელია",
+    SUPER_ADMIN_REQUIRED: "სუპერ ადმინისტრატორის წვდომა აუცილებელია",
+    ADMIN_PERMISSION_DENIED: "ამ მოქმედებისთვის უფლებები არ გაქვთ",
+    ADMIN_ACTION_TARGET_FORBIDDEN:
+      "არჩეულ მომხმარებელზე ეს ადმინისტრაციული მოქმედება აკრძალულია",
+    MONITORING_DATE_RANGE_INVALID: "მონიტორინგის თარიღების დიაპაზონი არასწორია",
+    MONITORING_DATE_RANGE_TOO_LARGE:
+      "მონიტორინგის თარიღების დიაპაზონი ძალიან დიდია",
+    MONITORING_FILTER_VALIDATION_FAILED:
+      "მონიტორინგის ფილტრების ვალიდაცია ვერ შესრულდა",
     USER_DELETE_HAS_ACTIVE_DATA: "მომხმარებელს აქვს აქტიური მონაცემები",
 
     CATEGORY_NOT_FOUND: "კატეგორია ვერ მოიძებნა",
@@ -224,6 +234,15 @@ const TEXT_TRANSLATIONS = {
       "საკუთარ ადმინისტრატორის ანგარიშზე სტატუსის შეცვლა აკრძალულია",
     "You cannot delete your own admin account":
       "საკუთარი ადმინისტრატორის ანგარიშის წაშლა აკრძალულია",
+    "Admin access required": "ადმინისტრატორის წვდომა აუცილებელია",
+    "Super admin access required": "სუპერ ადმინისტრატორის წვდომა აუცილებელია",
+    "Permission denied": "ამ მოქმედებისთვის უფლებები არ გაქვთ",
+    "Invalid monitoring date range": "მონიტორინგის თარიღების დიაპაზონი არასწორია",
+    "Monitoring date range must not exceed 90 days":
+      "მონიტორინგის თარიღების დიაპაზონი არ უნდა აღემატებოდეს 90 დღეს",
+    "Invalid monitoring filter": "მონიტორინგის ფილტრი არასწორია",
+    "You are not allowed to manage this user":
+      "არჩეულ მომხმარებელზე ეს ადმინისტრაციული მოქმედება აკრძალულია",
     "User has active marketplace data": "მომხმარებელს აქვს აქტიური მონაცემები",
     "Category is used by items": "კატეგორია გამოყენებულია პროდუქტებში",
     "Location is used by items": "ლოკაცია გამოყენებულია პროდუქტებში",
@@ -254,6 +273,8 @@ const TEXT_TRANSLATIONS = {
     "Offered item not active": "შემოთავაზებული პროდუქტი აქტიური არ არის",
     "Item already has a pending request":
       "პროდუქტს უკვე აქვს მომლოდინე მოთხოვნა",
+    "Request is already in process for this item":
+      "ამ პროდუქტზე თქვენი მოთხოვნა უკვე პროცესშია",
     "Offered item already has a pending request":
       "შემოთავაზებულ პროდუქტზე უკვე არსებობს მომლოდინე მოთხოვნა",
     "Request is not pending": "მოთხოვნა მომლოდინე არ არის",

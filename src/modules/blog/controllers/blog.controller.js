@@ -22,7 +22,11 @@ import {
 export const createAdminBlogHandler = async (req, res, next) => {
   try {
     const payload = adminCreateBlogSchema.parse(req.body);
-    const blog = await createBlogByAdmin({ authorId: req.user.id, payload });
+    const blog = await createBlogByAdmin({
+      authorId: req.user.id,
+      payload,
+      locale: req.locale,
+    });
     res.status(201).json({ success: true, blog });
   } catch (err) {
     next(err);
@@ -32,7 +36,7 @@ export const createAdminBlogHandler = async (req, res, next) => {
 export const listAdminBlogsHandler = async (req, res, next) => {
   try {
     const query = adminListBlogsQuerySchema.parse(req.query || {});
-    const result = await listBlogsForAdmin(query);
+    const result = await listBlogsForAdmin(query, req.locale);
     res.status(200).json({
       success: true,
       data: {
@@ -48,7 +52,7 @@ export const listAdminBlogsHandler = async (req, res, next) => {
 
 export const getAdminBlogHandler = async (req, res, next) => {
   try {
-    const blog = await getBlogForAdmin(req.params.id);
+    const blog = await getBlogForAdmin(req.params.id, req.locale);
     res.status(200).json({ success: true, blog });
   } catch (err) {
     next(err);
@@ -58,7 +62,11 @@ export const getAdminBlogHandler = async (req, res, next) => {
 export const updateAdminBlogHandler = async (req, res, next) => {
   try {
     const payload = adminUpdateBlogSchema.parse(req.body);
-    const blog = await updateBlogByAdmin({ blogId: req.params.id, payload });
+    const blog = await updateBlogByAdmin({
+      blogId: req.params.id,
+      payload,
+      locale: req.locale,
+    });
     res.status(200).json({ success: true, blog });
   } catch (err) {
     next(err);
@@ -77,7 +85,10 @@ export const deleteAdminBlogHandler = async (req, res, next) => {
 export const listBlogsHandler = async (req, res, next) => {
   try {
     const query = publicListBlogsQuerySchema.parse(req.query || {});
-    const result = await listPublishedBlogs(query);
+    const result = await listPublishedBlogs(query, req.locale);
+    res.vary("Accept-Language");
+    res.vary("X-Language");
+    res.vary("X-Lang");
     const lastModified =
       result.blogs?.reduce((latest, blog) => {
         const candidate = blog?.updatedAt ? new Date(blog.updatedAt) : null;
@@ -87,6 +98,7 @@ export const listBlogsHandler = async (req, res, next) => {
       }, null) || null;
     const etag = buildWeakEtag({
       resource: "blogs",
+      locale: req.locale,
       query,
       total: result.pagination?.total || 0,
       page: result.pagination?.page || 1,
@@ -106,7 +118,7 @@ export const listBlogsHandler = async (req, res, next) => {
 
 export const getBlogHandler = async (req, res, next) => {
   try {
-    const blog = await getPublishedBlog(req.params.id);
+    const blog = await getPublishedBlog(req.params.id, req.locale);
     res.status(200).json({ success: true, blog });
   } catch (err) {
     next(err);

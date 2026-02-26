@@ -12,10 +12,14 @@ import {
 
 export const getPublicDonationsHandler = async (req, res, next) => {
   try {
-    const data = await getPublicDonations();
+    const data = await getPublicDonations(req.locale);
+    res.vary("Accept-Language");
+    res.vary("X-Language");
+    res.vary("X-Lang");
     const lastModified = data.updatedAt || null;
     const etag = buildWeakEtag({
       resource: "donations",
+      locale: req.locale,
       total: data.methods?.length || 0,
       updatedAt: data.updatedAt || null,
     });
@@ -32,7 +36,7 @@ export const getPublicDonationsHandler = async (req, res, next) => {
 
 export const getAdminDonationsHandler = async (req, res, next) => {
   try {
-    const config = await getAdminDonations();
+    const config = await getAdminDonations(req.locale);
     res.status(200).json({ success: true, config });
   } catch (error) {
     next(error);
@@ -45,6 +49,7 @@ export const updateAdminDonationsHandler = async (req, res, next) => {
     const config = await updateAdminDonations({
       userId: req.user.id,
       payload,
+      locale: req.locale,
     });
 
     res.status(200).json({

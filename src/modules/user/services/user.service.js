@@ -5,6 +5,7 @@ import Session from "../../auth/models/session.model.js"; // if you have session
 import User from "../models/user.model.js";
 import { normalizeLanguage } from "../../../i18n/localization.js";
 import { badRequest, conflict, notFound, unauthorized } from "../../../utils/appError.js";
+import { getRolePermissions, normalizeRole } from "../../admin/rbac/rbac.js";
 
 const toSafeUser = (u) => ({
   _id: u._id.toString(),
@@ -15,7 +16,8 @@ const toSafeUser = (u) => ({
   phone: u.phone,
   preferredLanguage: normalizeLanguage(u.preferredLanguage),
   dateOfBirth: u.dateOfBirth,
-  role: u.role,
+  role: normalizeRole(u.role),
+  permissions: getRolePermissions(u.role),
   isActive: u.isActive,
   avatar: u.avatar,
   stats: u.stats,
@@ -66,7 +68,9 @@ export const getUsersPreview = async () => {
 };
 
 export const getMe = async (id) => {
-  return User.findById(id).select("-password").lean();
+  const user = await User.findById(id).select("-password").lean();
+  if (!user) return null;
+  return toSafeUser(user);
 };
 
 /**

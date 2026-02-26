@@ -1,5 +1,10 @@
 import mongoose from "mongoose";
 import Donation from "../models/donation.model.js";
+import {
+  normalizeTranslationsInput,
+  resolveLocalizedText,
+  toPlainTranslations,
+} from "../../../i18n/content.js";
 
 const DONATION_KEY = "DONATION_SETTINGS";
 
@@ -13,18 +18,28 @@ const sortMethods = (methods = []) =>
 
 const toPlainId = (value) => value?._id?.toString?.() || value?.toString?.() || "";
 
-const formatMethod = (method) => ({
-  id: toPlainId(method._id),
-  label: method.label || "",
-  accountNumber: method.accountNumber || "",
-  link: method.link || "",
-  isActive: Boolean(method.isActive),
-  order: Number(method.order || 0),
-});
+const formatMethod = (method, locale = "en") => {
+  const labelTranslations = toPlainTranslations(method.labelTranslations);
+  return {
+    id: toPlainId(method._id),
+    label: resolveLocalizedText({
+      locale,
+      baseValue: method.label || "",
+      translations: labelTranslations,
+    }),
+    labelTranslations,
+    accountNumber: method.accountNumber || "",
+    link: method.link || "",
+    isActive: Boolean(method.isActive),
+    order: Number(method.order || 0),
+  };
+};
 
-const formatConfig = (doc) => ({
+const formatConfig = (doc, locale = "en") => ({
   key: doc.key,
-  methods: sortMethods(doc.methods || []).map(formatMethod),
+  methods: sortMethods(doc.methods || []).map((method) =>
+    formatMethod(method, locale)
+  ),
   createdBy: toPlainId(doc.createdBy) || null,
   updatedBy: toPlainId(doc.updatedBy) || null,
   createdAt: doc.createdAt,
@@ -48,6 +63,7 @@ const ensureDonationConfig = async () => {
 const normalizeMethodInput = (method, index) => {
   const normalized = {
     label: method.label.trim(),
+    labelTranslations: normalizeTranslationsInput(method.labelTranslations),
     accountNumber: method.accountNumber.trim(),
     link: (method.link || "").trim(),
     isActive: method.isActive !== undefined ? Boolean(method.isActive) : true,
@@ -61,17 +77,21 @@ const normalizeMethodInput = (method, index) => {
   return normalized;
 };
 
-export const getPublicDonations = async () => {
+export const getPublicDonations = async (locale = "en") => {
   const config = await ensureDonationConfig();
   const methods = sortMethods(config.methods || [])
     .filter((method) => method.isActive)
-    .map((method) => ({
-      id: toPlainId(method._id),
-      label: method.label || "",
-      accountNumber: method.accountNumber || "",
-      link: method.link || "",
-      order: Number(method.order || 0),
-    }));
+    .map((method) => {
+      const formatted = formatMethod(method, locale);
+      return {
+        id: formatted.id,
+        label: formatted.label,
+        labelTranslations: formatted.labelTranslations,
+        accountNumber: formatted.accountNumber,
+        link: formatted.link,
+        order: formatted.order,
+      };
+    });
 
   return {
     methods,
@@ -79,12 +99,12 @@ export const getPublicDonations = async () => {
   };
 };
 
-export const getAdminDonations = async () => {
+export const getAdminDonations = async (locale = "en") => {
   const config = await ensureDonationConfig();
-  return formatConfig(config);
+  return formatConfig(config, locale);
 };
 
-export const updateAdminDonations = async ({ userId, payload }) => {
+export const updateAdminDonations = async ({ userId, payload, locale = "en" }) => {
   const config = await ensureDonationConfig();
 
   config.methods = (payload.methods || []).map(normalizeMethodInput);
@@ -94,5 +114,5 @@ export const updateAdminDonations = async ({ userId, payload }) => {
   config.updatedBy = userId;
 
   await config.save();
-  return formatConfig(config);
+  return formatConfig(config, locale);
 };

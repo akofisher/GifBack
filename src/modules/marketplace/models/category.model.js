@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 const categorySchema = new mongoose.Schema(
   {
     name: { type: String, required: true, unique: true, trim: true },
+    nameTranslations: { type: Map, of: String, default: {} },
     isActive: { type: Boolean, default: true },
     order: { type: Number, default: 0 },
   },
