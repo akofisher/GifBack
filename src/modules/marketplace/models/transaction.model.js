@@ -16,6 +16,15 @@ const itemTransactionSchema = new mongoose.Schema(
     itemBId: { type: mongoose.Schema.Types.ObjectId, ref: "Item", default: null },
     ownerBId: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null, index: true },
 
+    itemSnapshot: {
+      title: { type: String, default: "" },
+      imageUrl: { type: String, default: "" },
+    },
+    offeredItemSnapshot: {
+      title: { type: String, default: "" },
+      imageUrl: { type: String, default: "" },
+    },
+
     completedAt: { type: Date, required: true },
   },
   { timestamps: true }

@@ -3,6 +3,9 @@ import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import Session from "../../auth/models/session.model.js"; // if you have sessions collection
 import User from "../models/user.model.js";
+import Item from "../../marketplace/models/item.model.js";
+import ItemRequest from "../../marketplace/models/request.model.js";
+import ItemTransaction from "../../marketplace/models/transaction.model.js";
 import { normalizeLanguage } from "../../../i18n/localization.js";
 import { badRequest, conflict, notFound, unauthorized } from "../../../utils/appError.js";
 import { getRolePermissions, normalizeRole } from "../../admin/rbac/rbac.js";
@@ -67,10 +70,83 @@ export const getUsersPreview = async () => {
   return User.find().limit(20).lean();
 };
 
+const computeUserMarketplaceStats = async (userId) => {
+  const [
+    giving,
+    exchanging,
+    givenTx,
+    exchangedTx,
+    givenReq,
+    exchangedReq,
+  ] = await Promise.all([
+    Item.countDocuments({
+      ownerId: userId,
+      mode: "GIFT",
+      status: "ACTIVE",
+    }),
+    Item.countDocuments({
+      ownerId: userId,
+      mode: "EXCHANGE",
+      status: "ACTIVE",
+    }),
+    ItemTransaction.countDocuments({
+      type: "GIFT",
+      ownerId: userId,
+    }),
+    ItemTransaction.countDocuments({
+      type: "EXCHANGE",
+      $or: [{ ownerAId: userId }, { ownerBId: userId }],
+    }),
+    ItemRequest.countDocuments({
+      type: "GIFT",
+      status: "COMPLETED",
+      ownerId: userId,
+    }),
+    ItemRequest.countDocuments({
+      type: "EXCHANGE",
+      status: "COMPLETED",
+      $or: [{ ownerId: userId }, { requesterId: userId }],
+    }),
+  ]);
+
+  return {
+    giving,
+    exchanging,
+    // Use the maximum to support legacy data where one source may lag.
+    given: Math.max(givenTx, givenReq),
+    exchanged: Math.max(exchangedTx, exchangedReq),
+  };
+};
+
+const areStatsEqual = (left = {}, right = {}) =>
+  Number(left.giving || 0) === Number(right.giving || 0) &&
+  Number(left.exchanging || 0) === Number(right.exchanging || 0) &&
+  Number(left.given || 0) === Number(right.given || 0) &&
+  Number(left.exchanged || 0) === Number(right.exchanged || 0);
+
 export const getMe = async (id) => {
   const user = await User.findById(id).select("-password").lean();
   if (!user) return null;
-  return toSafeUser(user);
+
+  const liveStats = await computeUserMarketplaceStats(user._id);
+  if (!areStatsEqual(user.stats, liveStats)) {
+    await User.updateOne(
+      { _id: user._id },
+      {
+        $set: {
+          "stats.giving": liveStats.giving,
+          "stats.exchanging": liveStats.exchanging,
+          "stats.given": liveStats.given,
+          "stats.exchanged": liveStats.exchanged,
+        },
+      }
+    );
+  }
+
+  return toSafeUser({
+    ...user,
+    stats: liveStats,
+  });
 };
 
 /**
@@ -210,14 +286,10 @@ export const changeMyPassword = async (
     });
   }
 
-  await Session.updateMany(
-    {
-      userId,
-      revokedAt: null,
-      _id: { $ne: currentSession._id },
-    },
-    { $set: { revokedAt: now } }
-  );
+  await Session.deleteMany({
+    userId,
+    _id: { $ne: currentSession._id },
+  });
 
   const refreshToken = signRefreshToken(user, currentSession._id);
   currentSession.refreshTokenHash = hashToken(refreshToken);
@@ -251,7 +323,7 @@ export const deleteMe = async (userId, currentPassword) => {
   }
 
   if (Session) {
-    await Session.updateMany({ userId }, { $set: { revokedAt: new Date() } });
+    await Session.deleteMany({ userId });
   }
 
   await User.deleteOne({ _id: userId });
@@ -266,20 +338,163 @@ export const getTopGivenLeaderboard = async (limit = 100, options = {}) => {
   const normalizedLimit = Math.min(Math.max(Number(limit) || 100, 1), 100);
   const includeContacts = Boolean(options.includeContacts);
 
-  const users = await User.find({ role: "user", isActive: true })
-    .sort({ "stats.given": -1, _id: 1 })
-    .limit(normalizedLimit)
+  const [giftCountsTx, giftCountsReq] = await Promise.all([
+    ItemTransaction.aggregate([
+      {
+        $match: {
+          type: "GIFT",
+          ownerId: { $ne: null },
+        },
+      },
+      {
+        $group: {
+          _id: "$ownerId",
+          given: { $sum: 1 },
+        },
+      },
+      { $sort: { given: -1, _id: 1 } },
+      { $limit: normalizedLimit * 5 },
+    ]),
+    ItemRequest.aggregate([
+      {
+        $match: {
+          type: "GIFT",
+          status: "COMPLETED",
+          ownerId: { $ne: null },
+        },
+      },
+      {
+        $group: {
+          _id: "$ownerId",
+          given: { $sum: 1 },
+        },
+      },
+      { $sort: { given: -1, _id: 1 } },
+      { $limit: normalizedLimit * 5 },
+    ]),
+  ]);
+
+  const mergedGiftCountsByUser = new Map();
+  for (const row of [...giftCountsTx, ...giftCountsReq]) {
+    const key = row?._id?.toString?.();
+    if (!key) continue;
+    const given = Number(row.given || 0);
+    const current = mergedGiftCountsByUser.get(key);
+    if (!current || given > current.given) {
+      mergedGiftCountsByUser.set(key, {
+        _id: row._id,
+        given,
+      });
+    }
+  }
+
+  const giftCounts = Array.from(mergedGiftCountsByUser.values())
+    .sort((a, b) => {
+      if (b.given !== a.given) return b.given - a.given;
+      return a._id.toString().localeCompare(b._id.toString());
+    })
+    .slice(0, normalizedLimit * 5);
+
+  if (!giftCounts.length) {
+    return {
+      items: [],
+      pagination: {
+        page: 1,
+        limit: normalizedLimit,
+        total: 0,
+        pages: 1,
+      },
+    };
+  }
+
+  const candidateUserIds = giftCounts.map((row) => row._id);
+  const users = await User.find({
+    _id: { $in: candidateUserIds },
+    role: { $nin: ["admin", "super_admin"] },
+    isActive: { $ne: false },
+  })
     .select(
       includeContacts
-        ? "firstName lastName avatar stats email phone"
-        : "firstName lastName avatar stats"
+        ? "firstName lastName avatar email phone"
+        : "firstName lastName avatar"
     )
     .lean();
 
-  const leaderboard = users.map((user, index) => {
-    const given = Number(user?.stats?.given || 0);
-    const exchanged = Number(user?.stats?.exchanged || 0);
+  const userById = new Map(
+    users.map((user) => [user._id.toString(), user])
+  );
+
+  const rankedGiftRows = giftCounts
+    .filter((row) => userById.has(row._id?.toString?.()))
+    .slice(0, normalizedLimit);
+
+  if (!rankedGiftRows.length) {
+    return {
+      items: [],
+      pagination: {
+        page: 1,
+        limit: normalizedLimit,
+        total: 0,
+        pages: 1,
+      },
+    };
+  }
+
+  const selectedUserIds = rankedGiftRows.map((row) => row._id);
+  const [exchangeCountsTx, exchangeCountsReq] = await Promise.all([
+    ItemTransaction.aggregate([
+      {
+        $match: {
+          type: "EXCHANGE",
+          $or: [{ ownerAId: { $in: selectedUserIds } }, { ownerBId: { $in: selectedUserIds } }],
+        },
+      },
+      { $project: { owners: ["$ownerAId", "$ownerBId"] } },
+      { $unwind: "$owners" },
+      { $match: { owners: { $in: selectedUserIds } } },
+      {
+        $group: {
+          _id: "$owners",
+          exchanged: { $sum: 1 },
+        },
+      },
+    ]),
+    ItemRequest.aggregate([
+      {
+        $match: {
+          type: "EXCHANGE",
+          status: "COMPLETED",
+          $or: [{ ownerId: { $in: selectedUserIds } }, { requesterId: { $in: selectedUserIds } }],
+        },
+      },
+      { $project: { owners: ["$ownerId", "$requesterId"] } },
+      { $unwind: "$owners" },
+      { $match: { owners: { $in: selectedUserIds } } },
+      {
+        $group: {
+          _id: "$owners",
+          exchanged: { $sum: 1 },
+        },
+      },
+    ]),
+  ]);
+
+  const exchangedByUserId = new Map();
+  for (const row of [...exchangeCountsTx, ...exchangeCountsReq]) {
+    const key = row?._id?.toString?.();
+    if (!key) continue;
+    const exchanged = Number(row.exchanged || 0);
+    const current = exchangedByUserId.get(key) || 0;
+    if (exchanged > current) {
+      exchangedByUserId.set(key, exchanged);
+    }
+  }
+
+  const leaderboard = rankedGiftRows.map((row, index) => {
+    const user = userById.get(row._id.toString());
     const name = buildName(user.firstName, user.lastName);
+    const given = Number(row.given || 0);
+    const exchanged = Number(exchangedByUserId.get(row._id.toString()) || 0);
 
     return {
       rank: index + 1,

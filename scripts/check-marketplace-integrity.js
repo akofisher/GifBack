@@ -27,7 +27,7 @@ const buildExpectedUserStats = async () => {
       },
     ]),
     ItemTransaction.aggregate([
-      { $match: { type: "GIFT" } },
+      { $match: { type: "GIFT", ownerId: { $ne: null } } },
       {
         $group: {
           _id: "$ownerId",

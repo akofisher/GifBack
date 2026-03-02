@@ -4,12 +4,7 @@ import { conflict, forbidden, notFound } from "../../../utils/appError.js";
 import { deleteChatsByRequestIds } from "../../chat/services/chat.service.js";
 import Session from "../../auth/models/session.model.js";
 import User from "../../user/models/user.model.js";
-import { normalizeLanguage } from "../../../i18n/localization.js";
-import {
-  normalizeTranslationsInput,
-  resolveLocalizedText,
-  toPlainTranslations,
-} from "../../../i18n/content.js";
+import { normalizeTranslationsInput } from "../../../i18n/content.js";
 import Category from "../../marketplace/models/category.model.js";
 import Location from "../../marketplace/models/location.model.js";
 import Item from "../../marketplace/models/item.model.js";
@@ -19,206 +14,21 @@ import ProductReport from "../../reports/models/product-report.model.js";
 import { createMarketplaceEvents } from "../../marketplace/services/event-log.service.js";
 import {
   canManageTargetRole,
-  getRolePermissions,
   isSuperAdminRole,
   normalizeRole,
   ROLE,
 } from "../rbac/rbac.js";
-
-const buildSort = (sort) => {
-  if (sort === "createdAt_asc") return { createdAt: 1, _id: 1 };
-  if (sort === "updatedAt_desc") return { updatedAt: -1, _id: -1 };
-  if (sort === "updatedAt_asc") return { updatedAt: 1, _id: 1 };
-  return { createdAt: -1, _id: -1 };
-};
-
-const buildPagination = ({ page = 1, limit = 20, total = 0 }) => ({
-  page,
-  limit,
-  total,
-  pages: Math.max(1, Math.ceil(total / limit)),
-  totalPages: Math.max(1, Math.ceil(total / limit)),
-});
-
-const emptyPaginatedResult = ({ page = 1, limit = 20, key = "items" }) => ({
-  [key]: [],
-  pagination: buildPagination({ page, limit, total: 0 }),
-});
-
-const buildName = (firstName, lastName) =>
-  [firstName, lastName].filter(Boolean).join(" ").trim();
-
-const buildItemSnapshot = (item) => ({
-  title: item?.title || "",
-  imageUrl: item?.images?.[0]?.url || "",
-});
-
-const normalizeCountry = (country) => {
-  if (!country) return null;
-  return {
-    id: country._id?.toString?.() || "",
-    name: country.name || "",
-    nameTranslations: toPlainTranslations(country.nameTranslations),
-    localName: country.localName || "",
-    code: country.code || "",
-    isActive: Boolean(country.isActive),
-    order: Number(country.order || 0),
-  };
-};
-
-const normalizeCity = (city) => {
-  if (!city) return null;
-  return {
-    id: city._id?.toString?.() || "",
-    name: city.name || "",
-    nameTranslations: toPlainTranslations(city.nameTranslations),
-    localName: city.localName || "",
-    isActive: Boolean(city.isActive),
-    order: Number(city.order || 0),
-  };
-};
-
-const sortCityRows = (rows) =>
-  [...rows].sort((a, b) => {
-    if ((a.order || 0) !== (b.order || 0)) {
-      return (a.order || 0) - (b.order || 0);
-    }
-    return (a.name || "").localeCompare(b.name || "");
-  });
-
-const formatCountryWithCities = (country) => ({
-  ...normalizeCountry(country),
-  cities: sortCityRows(country.cities || []).map(normalizeCity),
-});
-
-const resolveLocalizedLocationName = ({ locale, name, nameTranslations, localName }) =>
-  resolveLocalizedText({
-    locale,
-    baseValue: name,
-    translations: nameTranslations,
-    fallbackValue: normalizeLanguage(locale) === "ka" ? localName : "",
-  });
-
-const formatCategory = (category, locale = "en") => {
-  const translations = toPlainTranslations(category.nameTranslations);
-  return {
-    ...category,
-    name: resolveLocalizedText({
-      locale,
-      baseValue: category.name,
-      translations,
-    }),
-    nameTranslations: translations,
-  };
-};
-
-const formatLocationCountry = (country, locale = "en") => {
-  const base = formatCountryWithCities(country);
-  return {
-    ...base,
-    name: resolveLocalizedLocationName({
-      locale,
-      name: base.name,
-      nameTranslations: base.nameTranslations,
-      localName: base.localName,
-    }),
-    cities: (base.cities || []).map((city) => ({
-      ...city,
-      name: resolveLocalizedLocationName({
-        locale,
-        name: city.name,
-        nameTranslations: city.nameTranslations,
-        localName: city.localName,
-      }),
-    })),
-  };
-};
-
-const extractItemLocation = (item) => {
-  const country =
-    item?.countryId && typeof item.countryId === "object" ? item.countryId : null;
-  const countryId = country?._id?.toString?.() || item?.countryId || null;
-  const cityId = item?.cityId || null;
-
-  if (!country) {
-    return {
-      countryId,
-      cityId,
-      country: null,
-      city: null,
-    };
-  }
-
-  const city =
-    country.cities?.find(
-      (entry) => entry?._id?.toString?.() === cityId?.toString?.()
-    ) || null;
-
-  return {
-    countryId,
-    cityId: city?._id?.toString?.() || cityId,
-    country: normalizeCountry(country),
-    city: normalizeCity(city),
-  };
-};
-
-const formatAdminItem = (item) => {
-  if (!item) return null;
-  const owner =
-    item.ownerId && typeof item.ownerId === "object" ? item.ownerId : null;
-  const category =
-    item.categoryId && typeof item.categoryId === "object" ? item.categoryId : null;
-  const location = extractItemLocation(item);
-  const ownerName = owner ? buildName(owner.firstName, owner.lastName) : "";
-
-  return {
-    ...item,
-    ownerId: owner?._id?.toString?.() || item.ownerId,
-    categoryId: category?._id?.toString?.() || item.categoryId,
-    countryId: location.countryId,
-    cityId: location.cityId,
-    country: location.country,
-    city: location.city,
-    address: item.address || "",
-    ownerName,
-    categoryName: category?.name || "",
-    owner: owner
-      ? {
-          id: owner._id?.toString?.() || "",
-          firstName: owner.firstName || "",
-          lastName: owner.lastName || "",
-          name: ownerName,
-          email: owner.email || "",
-          isActive: owner.isActive,
-        }
-      : null,
-    category: category
-      ? {
-          id: category._id?.toString?.() || "",
-          name: category.name || "",
-          isActive: category.isActive,
-          order: category.order,
-        }
-      : null,
-  };
-};
-
-const toSafeUser = (user) => ({
-  _id: user._id?.toString?.() || user._id,
-  firstName: user.firstName || "",
-  lastName: user.lastName || "",
-  name: buildName(user.firstName, user.lastName),
-  email: user.email || "",
-  emailVerified: Boolean(user.emailVerified),
-  phone: user.phone || "",
-  role: normalizeRole(user.role),
-  permissions: getRolePermissions(user.role),
-  isActive: Boolean(user.isActive),
-  avatar: user.avatar || null,
-  stats: user.stats || {},
-  createdAt: user.createdAt,
-  updatedAt: user.updatedAt,
-});
+import {
+  buildItemSnapshot,
+  buildPagination,
+  buildSort,
+  emptyPaginatedResult,
+  escapeRegex,
+  formatAdminItem,
+  formatCategory,
+  formatLocationCountry,
+  toSafeUser,
+} from "./admin.service.helpers.js";
 
 const createNotifications = async (entries, session) => {
   if (!entries.length) return;
@@ -489,7 +299,7 @@ export const listAdminUsers = async (query, actorRole = ROLE.ADMIN) => {
 
   if (typeof query.isActive === "boolean") filter.isActive = query.isActive;
   if (query.search) {
-    const escaped = query.search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const escaped = escapeRegex(query.search);
     const regex = new RegExp(escaped, "i");
     filter.$or = [
       { firstName: regex },
@@ -538,7 +348,7 @@ export const listAdminStaff = async (query) => {
     filter.isActive = query.isActive;
   }
   if (query.search) {
-    const escaped = query.search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const escaped = escapeRegex(query.search);
     const regex = new RegExp(escaped, "i");
     filter.$or = [
       { firstName: regex },
@@ -930,7 +740,7 @@ export const listAdminItems = async (query) => {
   if (query.ownerId) filter.ownerId = query.ownerId;
   if (query.categoryId) filter.categoryId = query.categoryId;
   if (query.search) {
-    const escaped = query.search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const escaped = escapeRegex(query.search);
     const regex = new RegExp(escaped, "i");
     filter.$or = [{ title: regex }, { description: regex }];
   }

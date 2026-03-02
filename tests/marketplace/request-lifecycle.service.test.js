@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import mongoose from "mongoose";
 import {
+  applyAutoCanceledVisibilityFilter,
   buildCompetingRequestConflictMatch,
+  deriveGiftPolicyOwnerState,
   formatRequestWithUsers,
   isDuplicateActiveRequestMongoError,
   resolveViewerRequestState,
@@ -164,4 +166,84 @@ test("formatRequestWithUsers propagates cancellationReason", () => {
   });
 
   assert.equal(formatted.cancellationReason, "AUTO_CANCELED_CONFLICT");
+});
+
+test("applyAutoCanceledVisibilityFilter hides auto-canceled by default", () => {
+  const filtered = applyAutoCanceledVisibilityFilter(
+    { requesterId: new mongoose.Types.ObjectId() },
+    {}
+  );
+
+  assert.equal(
+    filtered.cancellationReason?.$ne,
+    "AUTO_CANCELED_CONFLICT"
+  );
+});
+
+test("applyAutoCanceledVisibilityFilter keeps all rows when includeAutoCanceled=true", () => {
+  const baseFilter = { ownerId: new mongoose.Types.ObjectId() };
+  const filtered = applyAutoCanceledVisibilityFilter(baseFilter, {
+    includeAutoCanceled: true,
+  });
+
+  assert.equal(filtered, baseFilter);
+  assert.equal(filtered.cancellationReason, undefined);
+});
+
+test("deriveGiftPolicyOwnerState does not block after single completed gift", () => {
+  const now = new Date("2026-02-27T12:00:00.000Z");
+  const ownerId = new mongoose.Types.ObjectId().toString();
+  const state = deriveGiftPolicyOwnerState({
+    now,
+    transactionRows: [
+      {
+        _id: new mongoose.Types.ObjectId(),
+        ownerId,
+        requestId: new mongoose.Types.ObjectId(),
+        completedAt: new Date("2026-02-26T12:00:00.000Z"),
+      },
+    ],
+    requestRows: [],
+    limit: 2,
+  });
+
+  assert.equal(state.get(ownerId)?.count, 1);
+  assert.equal(state.get(ownerId)?.blocked, false);
+  assert.equal(state.get(ownerId)?.retryAt, null);
+});
+
+test("deriveGiftPolicyOwnerState blocks on second gift in window", () => {
+  const now = new Date("2026-02-27T12:00:00.000Z");
+  const ownerId = new mongoose.Types.ObjectId().toString();
+  const requestId = new mongoose.Types.ObjectId();
+  const state = deriveGiftPolicyOwnerState({
+    now,
+    transactionRows: [
+      {
+        _id: new mongoose.Types.ObjectId(),
+        ownerId,
+        requestId,
+        completedAt: new Date("2026-02-25T12:00:00.000Z"),
+      },
+      {
+        _id: new mongoose.Types.ObjectId(),
+        ownerId,
+        requestId: new mongoose.Types.ObjectId(),
+        completedAt: new Date("2026-02-26T12:00:00.000Z"),
+      },
+    ],
+    requestRows: [
+      // duplicate of same completion via request source should not inflate count
+      {
+        _id: requestId,
+        ownerId,
+        completedAt: new Date("2026-02-25T12:00:00.000Z"),
+      },
+    ],
+    limit: 2,
+  });
+
+  assert.equal(state.get(ownerId)?.count, 2);
+  assert.equal(state.get(ownerId)?.blocked, true);
+  assert.ok(state.get(ownerId)?.retryAt instanceof Date);
 });

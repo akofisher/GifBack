@@ -11,185 +11,67 @@ import ItemTransaction from "../models/transaction.model.js";
 import { deleteChatByRequestId, deleteChatsByRequestIds } from "../../chat/services/chat.service.js";
 import {
   ensureWeeklyGiftLimit,
-  getGiftLimitRetryAt,
-  getGiftLimitWindowStart,
-  isWithinGiftLimitWindow,
 } from "./gift-limit.service.js";
 import { createMarketplaceEvents } from "./event-log.service.js";
 import {
-  resolveLocalizedText,
-  toPlainTranslations,
-} from "../../../i18n/content.js";
-import { normalizeLanguage } from "../../../i18n/localization.js";
+  extractItemLocation,
+  formatCategory,
+  formatItemWithOwner,
+  getItemSnapshot,
+  historyTransactionPopulate,
+  isValidDate,
+  itemPopulate,
+  normalizeHistoryItemDetails,
+  normalizeLocationCountries,
+  requestPopulate,
+  toObjectIdString,
+} from "./marketplace.presenters.js";
+import {
+  attachViewerRequestState,
+} from "./marketplace.viewer-guard.service.js";
+import {
+  getRequestWithNames,
+  getRequestsWithNames,
+} from "./marketplace.request-read.service.js";
+import {
+  buildEmptyPaginatedResult,
+  buildHistorySort,
+  buildItemSort,
+  buildPagination,
+  parseObjectIdListFilter,
+  parsePagination,
+} from "./marketplace.query.js";
+import {
+  ACTIVE_REQUEST_STATUSES,
+  MAX_ACTIVE_EXCHANGE_ITEMS,
+  MAX_ACTIVE_GIFT_ITEMS,
+  REQUEST_CANCELLATION_REASONS,
+  REQUEST_EXPIRE_MS,
+} from "./marketplace.constants.js";
 
-const DEFAULT_EXPIRE_HOURS = 72;
-const DEFAULT_MAX_ACTIVE_GIFT_ITEMS = 5;
-const DEFAULT_MAX_ACTIVE_EXCHANGE_ITEMS = 5;
-
-const parsePositiveInteger = (value, fallback) => {
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
-    return fallback;
-  }
-  return parsed;
-};
-
-const parseExpireHours = () => {
-  const raw = Number(process.env.REQUEST_EXPIRE_HOURS);
-  if (Number.isNaN(raw) || raw <= 0) {
-    logger.warn(
-      { value: process.env.REQUEST_EXPIRE_HOURS },
-      "REQUEST_EXPIRE_HOURS is invalid; using default"
-    );
-    return DEFAULT_EXPIRE_HOURS;
-  }
-  return raw;
-};
-
-const REQUEST_EXPIRE_HOURS = parseExpireHours();
-const REQUEST_EXPIRE_MS = REQUEST_EXPIRE_HOURS * 60 * 60 * 1000;
-const MAX_ACTIVE_GIFT_ITEMS = parsePositiveInteger(
-  process.env.MAX_ACTIVE_GIFT_ITEMS,
-  DEFAULT_MAX_ACTIVE_GIFT_ITEMS
-);
-const MAX_ACTIVE_EXCHANGE_ITEMS = parsePositiveInteger(
-  process.env.MAX_ACTIVE_EXCHANGE_ITEMS,
-  DEFAULT_MAX_ACTIVE_EXCHANGE_ITEMS
-);
-const DEFAULT_PAGE_LIMIT = 20;
-const MAX_PAGE_LIMIT = 100;
-const ACTIVE_REQUEST_STATUSES = ["PENDING", "APPROVED"];
-const ALL_REQUEST_STATUSES = [
-  "PENDING",
-  "APPROVED",
-  "REJECTED",
-  "CANCELED",
-  "EXPIRED",
-  "COMPLETED",
-];
-const REQUEST_BLOCK_REASONS = Object.freeze({
-  ALREADY_IN_PROCESS: "ALREADY_IN_PROCESS",
-  ITEM_NOT_ACTIVE: "ITEM_NOT_ACTIVE",
-  OWNER_ITEM: "OWNER_ITEM",
-  BLOCKED_BY_POLICY: "BLOCKED_BY_POLICY",
-});
+export { formatRequestWithUsers, resolveViewerRequestState } from "./marketplace.presenters.js";
+export { deriveGiftPolicyOwnerState } from "./marketplace.viewer-guard.service.js";
 
 const createNotifications = async (entries, session) => {
   if (!entries.length) return;
   await Notification.insertMany(entries, { session });
 };
 
-const parsePagination = (options = {}) => {
-  const hasPagination =
-    options.page !== undefined || options.limit !== undefined;
+const shouldHideAutoCanceledConflict = (options = {}) =>
+  options.includeAutoCanceled !== true;
 
-  const page = Number.isInteger(options.page) && options.page > 0 ? options.page : 1;
-  const limit = Number.isInteger(options.limit) && options.limit > 0
-    ? Math.min(options.limit, MAX_PAGE_LIMIT)
-    : DEFAULT_PAGE_LIMIT;
-
-  return {
-    hasPagination,
-    page,
-    limit,
-    skip: hasPagination ? (page - 1) * limit : 0,
-  };
-};
-
-const buildPagination = ({ page, limit, total, hasPagination }) => {
-  if (!hasPagination) {
-    const effectiveLimit = total || 0;
-    return {
-      page: 1,
-      limit: effectiveLimit,
-      total,
-      totalPages: 1,
-      hasNext: false,
-    };
-  }
-
-  const totalPages = Math.max(1, Math.ceil(total / limit));
-  return {
-    page,
-    limit,
-    total,
-    totalPages,
-    hasNext: page < totalPages,
-  };
-};
-
-const parseObjectIdListFilter = (rawValue) => {
-  if (rawValue === undefined || rawValue === null || rawValue === "") {
-    return { hasInput: false, ids: [], hasInvalid: false };
-  }
-
-  const chunks = Array.isArray(rawValue)
-    ? rawValue.flatMap((entry) => String(entry).split(","))
-    : String(rawValue).split(",");
-
-  const normalized = chunks
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-
-  const ids = [];
-  let hasInvalid = false;
-
-  for (const id of normalized) {
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      hasInvalid = true;
-      continue;
-    }
-    ids.push(id);
+export const applyAutoCanceledVisibilityFilter = (filter, options = {}) => {
+  if (!shouldHideAutoCanceledConflict(options)) {
+    return filter;
   }
 
   return {
-    hasInput: normalized.length > 0,
-    ids,
-    hasInvalid,
+    ...filter,
+    cancellationReason: {
+      $ne: REQUEST_CANCELLATION_REASONS.AUTO_CANCELED_CONFLICT,
+    },
   };
 };
-
-const buildItemSort = (sort) => {
-  if (sort === "createdAt_asc") return { createdAt: 1, _id: 1 };
-  if (sort === "updatedAt_desc") return { updatedAt: -1, _id: -1 };
-  if (sort === "updatedAt_asc") return { updatedAt: 1, _id: 1 };
-  return { createdAt: -1, _id: -1 };
-};
-
-const buildRequestSort = (sort) => {
-  if (sort === "createdAt_asc") return { createdAt: 1, _id: 1 };
-  if (sort === "updatedAt_desc") return { updatedAt: -1, _id: -1 };
-  if (sort === "updatedAt_asc") return { updatedAt: 1, _id: 1 };
-  return { createdAt: -1, _id: -1 };
-};
-
-const buildHistorySort = (sort) => {
-  if (sort === "completedAt_asc") return { completedAt: 1, _id: 1 };
-  if (sort === "createdAt_desc") return { createdAt: -1, _id: -1 };
-  if (sort === "createdAt_asc") return { createdAt: 1, _id: 1 };
-  return { completedAt: -1, _id: -1 };
-};
-
-const buildEmptyPaginatedResult = (options = {}, key = "items") => {
-  const pagination = parsePagination(options);
-  return {
-    [key]: [],
-    pagination: buildPagination({
-      page: pagination.page,
-      limit: pagination.limit,
-      total: 0,
-      hasPagination: pagination.hasPagination,
-    }),
-  };
-};
-
-const buildName = (user) =>
-  [user?.firstName, user?.lastName].filter(Boolean).join(" ").trim();
-
-const getItemSnapshot = (item) => ({
-  title: item?.title || "",
-  imageUrl: item?.images?.[0]?.url || "",
-});
 
 const getActiveListingLimit = (mode) =>
   mode === "GIFT" ? MAX_ACTIVE_GIFT_ITEMS : MAX_ACTIVE_EXCHANGE_ITEMS;
@@ -257,119 +139,6 @@ const reserveActiveListingSlot = async ({ ownerId, mode, session }) => {
   throw conflict("User stats are inconsistent", "STATS_INCONSISTENT");
 };
 
-const toObjectIdString = (value) => value?.toString?.() || String(value || "");
-
-const resolveLocalizedLocationName = ({ locale, name, nameTranslations, localName }) =>
-  resolveLocalizedText({
-    locale,
-    baseValue: name,
-    translations: nameTranslations,
-    fallbackValue: normalizeLanguage(locale) === "ka" ? localName : "",
-  });
-
-const normalizeCountry = (country, locale = "en") => {
-  if (!country) return null;
-  const nameTranslations = toPlainTranslations(country.nameTranslations);
-  return {
-    id: country._id?.toString?.() || "",
-    name: resolveLocalizedLocationName({
-      locale,
-      name: country.name || "",
-      nameTranslations,
-      localName: country.localName || "",
-    }),
-    defaultName: country.name || "",
-    nameTranslations,
-    localName: country.localName || "",
-    code: country.code || "",
-    isActive: Boolean(country.isActive),
-    order: Number(country.order || 0),
-    createdAt: country.createdAt || null,
-    updatedAt: country.updatedAt || null,
-  };
-};
-
-const normalizeCity = (city, locale = "en") => {
-  if (!city) return null;
-  const nameTranslations = toPlainTranslations(city.nameTranslations);
-  return {
-    id: city._id?.toString?.() || "",
-    name: resolveLocalizedLocationName({
-      locale,
-      name: city.name || "",
-      nameTranslations,
-      localName: city.localName || "",
-    }),
-    defaultName: city.name || "",
-    nameTranslations,
-    localName: city.localName || "",
-    isActive: Boolean(city.isActive),
-    order: Number(city.order || 0),
-  };
-};
-
-const extractItemLocation = (item, locale = "en") => {
-  const country =
-    item?.countryId && typeof item.countryId === "object" ? item.countryId : null;
-  const countryRef = country?._id || item?.countryId || null;
-  const cityRef = item?.cityId || null;
-
-  if (!country) {
-    return {
-      countryId: countryRef,
-      cityId: cityRef,
-      country: null,
-      city: null,
-    };
-  }
-
-  const city =
-    country.cities?.find(
-      (entry) => entry?._id?.toString?.() === cityRef?.toString?.()
-    ) || null;
-
-  return {
-    countryId: country._id?.toString?.() || countryRef,
-    cityId: city?._id?.toString?.() || cityRef,
-    country: normalizeCountry(country, locale),
-    city: normalizeCity(city, locale),
-  };
-};
-
-const normalizeLocationCountries = (countries, locale = "en") =>
-  countries
-    .map((country) => ({
-      ...normalizeCountry(country, locale),
-      cities: (country.cities || [])
-        .filter((city) => city?.isActive)
-        .sort((a, b) => {
-          if ((a.order || 0) !== (b.order || 0)) {
-            return (a.order || 0) - (b.order || 0);
-          }
-          return (a.name || "").localeCompare(b.name || "");
-        })
-        .map((city) => normalizeCity(city, locale)),
-    }))
-    .sort((a, b) => {
-      if ((a.order || 0) !== (b.order || 0)) {
-        return (a.order || 0) - (b.order || 0);
-      }
-      return (a.name || "").localeCompare(b.name || "");
-    });
-
-const formatCategory = (category, locale = "en") => {
-  const nameTranslations = toPlainTranslations(category.nameTranslations);
-  return {
-    ...category,
-    name: resolveLocalizedText({
-      locale,
-      baseValue: category.name,
-      translations: nameTranslations,
-    }),
-    nameTranslations,
-  };
-};
-
 const resolveAndValidateLocation = async ({
   countryId,
   cityId,
@@ -411,196 +180,6 @@ const resolveAndValidateLocation = async ({
   return { country, city };
 };
 
-const isValidDate = (value) =>
-  value instanceof Date && !Number.isNaN(value.getTime());
-
-const formatItemWithOwner = (item) => {
-  if (!item) return item;
-  const owner =
-    item.ownerId && typeof item.ownerId === "object" ? item.ownerId : null;
-  const ownerName = owner ? buildName(owner) : "";
-  const location = extractItemLocation(item);
-
-  return {
-    ...item,
-    id: item._id?.toString?.() || item._id,
-    ownerId: owner?._id?.toString?.() || item.ownerId,
-    countryId: location.countryId,
-    cityId: location.cityId,
-    country: location.country,
-    city: location.city,
-    address: item.address || "",
-    ownerName,
-    thumbnailUrl: item.images?.[0]?.url || "",
-    owner: owner
-      ? {
-          id: owner._id?.toString?.() || "",
-          firstName: owner.firstName || "",
-          lastName: owner.lastName || "",
-          name: ownerName,
-        }
-      : null,
-  };
-};
-
-export const resolveViewerRequestState = ({
-  viewerId,
-  itemStatus,
-  itemOwnerId,
-  myRequestStatus,
-  blockedByPolicy = false,
-}) => {
-  if (!viewerId) {
-    return {
-      canCreateRequest: null,
-      requestBlockReason: null,
-    };
-  }
-
-  const viewerKey = viewerId.toString();
-  const ownerKey = itemOwnerId?.toString?.() || (itemOwnerId ? String(itemOwnerId) : "");
-
-  if (itemStatus !== "ACTIVE") {
-    return {
-      canCreateRequest: false,
-      requestBlockReason: REQUEST_BLOCK_REASONS.ITEM_NOT_ACTIVE,
-    };
-  }
-
-  if (ownerKey && ownerKey === viewerKey) {
-    return {
-      canCreateRequest: false,
-      requestBlockReason: REQUEST_BLOCK_REASONS.OWNER_ITEM,
-    };
-  }
-
-  if (myRequestStatus && ACTIVE_REQUEST_STATUSES.includes(myRequestStatus)) {
-    return {
-      canCreateRequest: false,
-      requestBlockReason: REQUEST_BLOCK_REASONS.ALREADY_IN_PROCESS,
-    };
-  }
-
-  if (blockedByPolicy) {
-    return {
-      canCreateRequest: false,
-      requestBlockReason: REQUEST_BLOCK_REASONS.BLOCKED_BY_POLICY,
-    };
-  }
-
-  return {
-    canCreateRequest: true,
-    requestBlockReason: null,
-  };
-};
-
-const attachViewerRequestState = async (items, viewerId) => {
-  if (!Array.isArray(items) || !items.length) return items;
-
-  if (!viewerId) {
-    return items.map((item) => ({
-      ...item,
-      myRequestStatus: null,
-      myRequestId: null,
-      canCreateRequest: null,
-      requestBlockReason: null,
-    }));
-  }
-
-  const itemIds = items
-    .map((item) => item?._id || item?.id)
-    .filter(Boolean)
-    .map((id) => id.toString());
-
-  if (!itemIds.length) return items;
-
-  const latestRequests = await ItemRequest.find({
-    requesterId: viewerId,
-    itemId: { $in: itemIds },
-    status: { $in: ALL_REQUEST_STATUSES },
-  })
-    .sort({ createdAt: -1, _id: -1 })
-    .select("_id itemId status createdAt")
-    .lean();
-
-  const latestByItemId = new Map();
-  for (const request of latestRequests) {
-    const key = request.itemId?.toString?.();
-    if (!key || latestByItemId.has(key)) continue;
-    latestByItemId.set(key, {
-      id: request._id?.toString?.() || null,
-      status: request.status || null,
-    });
-  }
-
-  const ownerIdsForPolicy = Array.from(
-    new Set(
-      items
-        .filter(
-          (item) =>
-            item?.mode === "GIFT" &&
-            item?.ownerId &&
-            item.ownerId.toString() !== viewerId.toString()
-        )
-        .map((item) => item.ownerId.toString())
-    )
-  );
-
-  const blockedGiftOwners = new Set();
-  if (ownerIdsForPolicy.length) {
-    const now = new Date();
-    const recentGiftTransactions = await ItemTransaction.find({
-      type: "GIFT",
-      receiverId: viewerId,
-      ownerId: { $in: ownerIdsForPolicy },
-      completedAt: { $gt: getGiftLimitWindowStart(now) },
-    })
-      .sort({ completedAt: -1 })
-      .select("ownerId completedAt")
-      .lean();
-
-    for (const tx of recentGiftTransactions) {
-      const ownerKey = tx.ownerId?.toString?.();
-      if (!ownerKey || blockedGiftOwners.has(ownerKey)) continue;
-      const completedAt = tx.completedAt ? new Date(tx.completedAt) : null;
-      if (!isWithinGiftLimitWindow(completedAt, now)) continue;
-      const retryAt = getGiftLimitRetryAt(completedAt);
-      if (retryAt > now) {
-        blockedGiftOwners.add(ownerKey);
-      }
-    }
-  }
-
-  return items.map((item) => {
-    const itemKey = item?._id?.toString?.() || item?.id?.toString?.();
-    const ownerKey = item?.ownerId?.toString?.();
-    const myRequest = itemKey ? latestByItemId.get(itemKey) || null : null;
-
-    const availability = resolveViewerRequestState({
-      viewerId,
-      itemStatus: item?.status,
-      itemOwnerId: ownerKey,
-      myRequestStatus: myRequest?.status || null,
-      blockedByPolicy: Boolean(
-        item?.mode === "GIFT" && ownerKey && blockedGiftOwners.has(ownerKey)
-      ),
-    });
-
-    return {
-      ...item,
-      myRequestStatus: myRequest?.status || null,
-      myRequestId: myRequest?.id || null,
-      canCreateRequest: availability.canCreateRequest,
-      requestBlockReason: availability.requestBlockReason,
-    };
-  });
-};
-
-const itemPopulate = [
-  { path: "ownerId", select: "firstName lastName" },
-  { path: "countryId", select: "name localName code isActive order cities" },
-];
-
 const getItemWithOwner = async (itemId) => {
   const item = await Item.findById(itemId).populate(itemPopulate).lean();
   return formatItemWithOwner(item);
@@ -633,173 +212,6 @@ const getItemsWithOwner = async (filter, options = {}) => {
     }),
   };
 };
-
-export const formatRequestWithUsers = (request) => {
-  if (!request) return request;
-  const owner =
-    request.ownerId && typeof request.ownerId === "object"
-      ? request.ownerId
-      : null;
-  const requester =
-    request.requesterId && typeof request.requesterId === "object"
-      ? request.requesterId
-      : null;
-  const item =
-    request.itemId && typeof request.itemId === "object" ? request.itemId : null;
-  const offeredItem =
-    request.offeredItemId && typeof request.offeredItemId === "object"
-      ? request.offeredItemId
-      : null;
-
-  const ownerName = owner ? buildName(owner) : "";
-  const requesterName = requester ? buildName(requester) : "";
-  const itemSnapshot =
-    request.itemSnapshot?.title || request.itemSnapshot?.imageUrl
-      ? request.itemSnapshot
-      : item
-        ? getItemSnapshot(item)
-        : null;
-  const offeredItemSnapshot =
-    request.offeredItemSnapshot?.title || request.offeredItemSnapshot?.imageUrl
-      ? request.offeredItemSnapshot
-      : offeredItem
-        ? getItemSnapshot(offeredItem)
-        : null;
-  const itemDetails = item
-    ? (() => {
-        const location = extractItemLocation(item);
-        return {
-          id: item._id?.toString?.() || item._id,
-          title: item.title || "",
-          description: item.description || "",
-          images: item.images || [],
-          mode: item.mode,
-          status: item.status,
-          categoryId: item.categoryId || null,
-          ownerId: item.ownerId || null,
-          countryId: location.countryId,
-          cityId: location.cityId,
-          country: location.country,
-          city: location.city,
-          address: item.address || "",
-        };
-      })()
-    : null;
-  const offeredItemDetails = offeredItem
-    ? (() => {
-        const location = extractItemLocation(offeredItem);
-        return {
-          id: offeredItem._id?.toString?.() || offeredItem._id,
-          title: offeredItem.title || "",
-          description: offeredItem.description || "",
-          images: offeredItem.images || [],
-          mode: offeredItem.mode,
-          status: offeredItem.status,
-          categoryId: offeredItem.categoryId || null,
-          ownerId: offeredItem.ownerId || null,
-          countryId: location.countryId,
-          cityId: location.cityId,
-          country: location.country,
-          city: location.city,
-          address: offeredItem.address || "",
-        };
-      })()
-    : null;
-
-  return {
-    ...request,
-    id: request._id?.toString?.() || request._id,
-    ownerId: owner?._id?.toString?.() || request.ownerId,
-    requesterId: requester?._id?.toString?.() || request.requesterId,
-    itemId: item?._id?.toString?.() || request.itemId,
-    offeredItemId: offeredItem?._id?.toString?.() || request.offeredItemId,
-    chatId: request.chatId?.toString?.() || request.chatId || null,
-    cancellationReason: request.cancellationReason || null,
-    ownerName,
-    requesterName,
-    itemSnapshot,
-    offeredItemSnapshot,
-    itemThumbnailUrl: itemSnapshot?.imageUrl || "",
-    offeredItemThumbnailUrl: offeredItemSnapshot?.imageUrl || "",
-    itemDetails,
-    offeredItemDetails,
-    item: itemDetails,
-    offeredItem: offeredItemDetails,
-    owner: owner
-      ? {
-          id: owner._id?.toString?.() || "",
-          firstName: owner.firstName || "",
-          lastName: owner.lastName || "",
-          name: ownerName,
-        }
-      : null,
-    requester: requester
-      ? {
-          id: requester._id?.toString?.() || "",
-          firstName: requester.firstName || "",
-          lastName: requester.lastName || "",
-          name: requesterName,
-        }
-      : null,
-  };
-};
-
-const requestPopulate = [
-  { path: "ownerId", select: "firstName lastName" },
-  { path: "requesterId", select: "firstName lastName" },
-  {
-    path: "itemId",
-    select: "title description images mode status categoryId ownerId countryId cityId address",
-    populate: {
-      path: "countryId",
-      select: "name localName code isActive order cities",
-    },
-  },
-  {
-    path: "offeredItemId",
-    select: "title description images mode status categoryId ownerId countryId cityId address",
-    populate: {
-      path: "countryId",
-      select: "name localName code isActive order cities",
-    },
-  },
-];
-
-const getRequestWithNames = async (requestId) => {
-  const request = await ItemRequest.findById(requestId)
-    .populate(requestPopulate)
-    .lean();
-  return formatRequestWithUsers(request);
-};
-
-const getRequestsWithNames = async (filter, options = {}) => {
-  const pagination = parsePagination(options);
-  const sort = buildRequestSort(options.sort);
-
-  let query = ItemRequest.find(filter)
-    .sort(sort)
-    .populate(requestPopulate);
-
-  if (pagination.hasPagination) {
-    query = query.skip(pagination.skip).limit(pagination.limit);
-  }
-
-  const [requests, total] = await Promise.all([
-    query.lean(),
-    ItemRequest.countDocuments(filter),
-  ]);
-
-  return {
-    requests: requests.map(formatRequestWithUsers),
-    pagination: buildPagination({
-      page: pagination.page,
-      limit: pagination.limit,
-      total,
-      hasPagination: pagination.hasPagination,
-    }),
-  };
-};
-
 const syncPendingRequestCountsForItems = async (itemIds, session) => {
   const normalizedIds = Array.from(
     new Set(
@@ -936,7 +348,7 @@ const autoCancelCompetingPendingRequests = async ({
         respondedAt: now,
         expiresAt: null,
         chatId: null,
-        cancellationReason: "AUTO_CANCELED_CONFLICT",
+        cancellationReason: REQUEST_CANCELLATION_REASONS.AUTO_CANCELED_CONFLICT,
       },
     },
     { session }
@@ -985,7 +397,7 @@ const autoCancelCompetingPendingRequests = async ({
       ownerId: request.ownerId,
       requesterId: request.requesterId,
       metadata: {
-        reason: "AUTO_CANCELED_CONFLICT",
+        reason: REQUEST_CANCELLATION_REASONS.AUTO_CANCELED_CONFLICT,
       },
     })),
     session
@@ -1650,16 +1062,18 @@ export const createRequest = async (requesterId, itemId, payload) => {
 };
 
 export const getMyRequests = async (requesterId, options = {}) => {
-  const filter = { requesterId };
+  let filter = { requesterId };
   if (options.status) filter.status = options.status;
   if (options.type) filter.type = options.type;
+  filter = applyAutoCanceledVisibilityFilter(filter, options);
   return getRequestsWithNames(filter, options);
 };
 
 export const getIncomingRequests = async (ownerId, options = {}) => {
-  const filter = { ownerId };
+  let filter = { ownerId };
   if (options.status) filter.status = options.status;
   if (options.type) filter.type = options.type;
+  filter = applyAutoCanceledVisibilityFilter(filter, options);
   return getRequestsWithNames(filter, options);
 };
 
@@ -1994,6 +1408,15 @@ export const confirmRequest = async (userId, requestId) => {
 
     if (!itemA) throw notFound("Item not found", "ITEM_NOT_FOUND");
 
+    if (request.type === "GIFT") {
+      await ensureWeeklyGiftLimit({
+        ownerId: request.ownerId,
+        receiverId: request.requesterId,
+        session,
+        now,
+      });
+    }
+
     request.status = "COMPLETED";
     request.completedAt = now;
     request.expiresAt = null;
@@ -2029,6 +1452,8 @@ export const confirmRequest = async (userId, requestId) => {
             itemId: itemA._id,
             ownerId: request.ownerId,
             receiverId: request.requesterId,
+            itemSnapshot: getItemSnapshot(itemA),
+            offeredItemSnapshot: { title: "", imageUrl: "" },
             completedAt: now,
           },
         ],
@@ -2050,6 +1475,10 @@ export const confirmRequest = async (userId, requestId) => {
             ownerAId: request.ownerId,
             itemBId: itemB ? itemB._id : null,
             ownerBId: request.requesterId,
+            itemSnapshot: getItemSnapshot(itemA),
+            offeredItemSnapshot: itemB
+              ? getItemSnapshot(itemB)
+              : { title: "", imageUrl: "" },
             completedAt: now,
           },
         ],
@@ -2085,6 +1514,25 @@ export const confirmRequest = async (userId, requestId) => {
           requestId: request._id,
           itemId: request.itemId,
           offeredItemId: request.offeredItemId || null,
+        },
+      ],
+      session
+    );
+
+    await createMarketplaceEvents(
+      [
+        {
+          type: "REQUEST_COMPLETED",
+          actorId: userId,
+          requestId: request._id,
+          itemId: request.itemId,
+          offeredItemId: request.offeredItemId || null,
+          ownerId: request.ownerId,
+          requesterId: request.requesterId,
+          metadata: {
+            type: request.type,
+            completedAt: now,
+          },
         },
       ],
       session
@@ -2340,6 +1788,12 @@ export const hardDeleteRequest = async (userId, requestId) => {
   if (request.status === "PENDING" || request.status === "APPROVED") {
     throw conflict("Request is not inactive", "REQUEST_NOT_INACTIVE");
   }
+  if (request.status === "COMPLETED") {
+    throw conflict(
+      "Completed requests cannot be hard deleted",
+      "REQUEST_DELETE_FORBIDDEN_COMPLETED"
+    );
+  }
 
   await deleteChatByRequestId(request._id);
   await createMarketplaceEvents([
@@ -2376,17 +1830,143 @@ export const getRequestDetails = async (userId, requestId) => {
   return request;
 };
 
-export const getHistory = async (userId, role = "all", options = {}) => {
-  let filter;
+const getHistoryFromCompletedRequests = async (userId, role = "all", options = {}) => {
+  const baseFilter = { status: "COMPLETED" };
+  let requestFilter = baseFilter;
 
   if (role === "receiver") {
-    filter = { receiverId: userId, type: "GIFT" };
+    requestFilter = { ...baseFilter, requesterId: userId, type: "GIFT" };
   } else if (role === "owner") {
-    filter = { ownerId: userId, type: "GIFT" };
+    requestFilter = { ...baseFilter, ownerId: userId, type: "GIFT" };
   } else if (role === "participant") {
-    filter = { $or: [{ ownerAId: userId }, { ownerBId: userId }], type: "EXCHANGE" };
+    requestFilter = {
+      ...baseFilter,
+      type: "EXCHANGE",
+      $or: [{ ownerId: userId }, { requesterId: userId }],
+    };
   } else {
-    filter = {
+    requestFilter = {
+      ...baseFilter,
+      $or: [{ ownerId: userId }, { requesterId: userId }],
+    };
+  }
+
+  const pagination = parsePagination(options);
+  const sort = buildHistorySort(options.sort);
+
+  let historyQuery = ItemRequest.find(requestFilter)
+    .sort(sort)
+    .populate(requestPopulate);
+
+  if (pagination.hasPagination) {
+    historyQuery = historyQuery.skip(pagination.skip).limit(pagination.limit);
+  }
+
+  const [historyRequests, total] = await Promise.all([
+    historyQuery.lean(),
+    ItemRequest.countDocuments(requestFilter),
+  ]);
+
+  const mappedHistory = historyRequests.map((request) => {
+    const item = request.itemId && typeof request.itemId === "object" ? request.itemId : null;
+    const offeredItem =
+      request.offeredItemId && typeof request.offeredItemId === "object"
+        ? request.offeredItemId
+        : null;
+
+    const itemDetails = request.type === "GIFT" ? normalizeHistoryItemDetails(item) : null;
+    const itemADetails =
+      request.type === "EXCHANGE" ? normalizeHistoryItemDetails(item) : null;
+    const itemBDetails =
+      request.type === "EXCHANGE" ? normalizeHistoryItemDetails(offeredItem) : null;
+
+    const itemSnapshot =
+      request.itemSnapshot?.title || request.itemSnapshot?.imageUrl
+        ? request.itemSnapshot
+        : item
+          ? getItemSnapshot(item)
+          : null;
+    const offeredItemSnapshot =
+      request.offeredItemSnapshot?.title || request.offeredItemSnapshot?.imageUrl
+        ? request.offeredItemSnapshot
+        : offeredItem
+          ? getItemSnapshot(offeredItem)
+          : null;
+
+    const completedAt = request.completedAt || request.updatedAt || request.createdAt;
+
+    return {
+      id: request._id?.toString?.() || request._id,
+      _id: request._id,
+      type: request.type,
+      requestId: request._id?.toString?.() || request._id,
+      itemId:
+        request.type === "GIFT"
+          ? item?._id?.toString?.() || request.itemId || null
+          : null,
+      ownerId:
+        request.type === "GIFT"
+          ? request.ownerId?._id?.toString?.() || request.ownerId || null
+          : null,
+      receiverId:
+        request.type === "GIFT"
+          ? request.requesterId?._id?.toString?.() || request.requesterId || null
+          : null,
+      itemAId:
+        request.type === "EXCHANGE"
+          ? item?._id?.toString?.() || request.itemId || null
+          : null,
+      ownerAId:
+        request.type === "EXCHANGE"
+          ? request.ownerId?._id?.toString?.() || request.ownerId || null
+          : null,
+      itemBId:
+        request.type === "EXCHANGE"
+          ? offeredItem?._id?.toString?.() || request.offeredItemId || null
+          : null,
+      ownerBId:
+        request.type === "EXCHANGE"
+          ? request.requesterId?._id?.toString?.() || request.requesterId || null
+          : null,
+      completedAt,
+      createdAt: request.createdAt,
+      updatedAt: request.updatedAt,
+      itemDetails,
+      itemADetails,
+      itemBDetails,
+      itemSnapshot,
+      offeredItemSnapshot,
+      thumbnailUrl: itemSnapshot?.imageUrl || "",
+      item: request.type === "GIFT" ? itemDetails : itemADetails,
+      offeredItem: request.type === "EXCHANGE" ? itemBDetails : null,
+    };
+  });
+
+  return {
+    history: mappedHistory,
+    pagination: buildPagination({
+      page: pagination.page,
+      limit: pagination.limit,
+      total,
+      hasPagination: pagination.hasPagination,
+    }),
+  };
+};
+
+export const getHistory = async (userId, role = "all", options = {}) => {
+  let transactionFilter;
+
+  if (role === "receiver") {
+    transactionFilter = { type: "GIFT", receiverId: userId };
+  } else if (role === "owner") {
+    transactionFilter = { type: "GIFT", ownerId: userId };
+  } else if (role === "participant") {
+    transactionFilter = {
+      type: "EXCHANGE",
+      $or: [{ ownerAId: userId }, { ownerBId: userId }],
+    };
+  } else {
+    transactionFilter = {
       $or: [
         { ownerId: userId },
         { receiverId: userId },
@@ -2399,112 +1979,132 @@ export const getHistory = async (userId, role = "all", options = {}) => {
   const pagination = parsePagination(options);
   const sort = buildHistorySort(options.sort);
 
-  let historyQuery = ItemTransaction.find(filter)
+  let historyQuery = ItemTransaction.find(transactionFilter)
     .sort(sort)
-    .populate([
-      {
-        path: "itemId",
-        select:
-          "title description images mode status categoryId ownerId countryId cityId address",
-        populate: {
-          path: "countryId",
-          select: "name localName code isActive order cities",
-        },
-      },
-      {
-        path: "itemAId",
-        select:
-          "title description images mode status categoryId ownerId countryId cityId address",
-        populate: {
-          path: "countryId",
-          select: "name localName code isActive order cities",
-        },
-      },
-      {
-        path: "itemBId",
-        select:
-          "title description images mode status categoryId ownerId countryId cityId address",
-        populate: {
-          path: "countryId",
-          select: "name localName code isActive order cities",
-        },
-      },
-      {
-        path: "requestId",
-        select: "itemSnapshot offeredItemSnapshot",
-      },
-    ]);
+    .populate(historyTransactionPopulate);
 
   if (pagination.hasPagination) {
     historyQuery = historyQuery.skip(pagination.skip).limit(pagination.limit);
   }
 
-  const [history, total] = await Promise.all([
+  const [historyTransactions, total] = await Promise.all([
     historyQuery.lean(),
-    ItemTransaction.countDocuments(filter),
+    ItemTransaction.countDocuments(transactionFilter),
   ]);
 
-  const normalizeItemDetails = (item) =>
-    item
-      ? (() => {
-          const location = extractItemLocation(item);
-          return {
-            id: item._id?.toString?.() || item._id,
-            title: item.title || "",
-            description: item.description || "",
-            images: item.images || [],
-            mode: item.mode,
-            status: item.status,
-            categoryId: item.categoryId || null,
-            ownerId: item.ownerId || null,
-            countryId: location.countryId,
-            cityId: location.cityId,
-            country: location.country,
-            city: location.city,
-            address: item.address || "",
-          };
-        })()
-      : null;
+  if (!total) {
+    return getHistoryFromCompletedRequests(userId, role, options);
+  }
 
-  const mappedHistory = history.map((tx) => {
-    const item = tx.itemId && typeof tx.itemId === "object" ? tx.itemId : null;
-    const itemA = tx.itemAId && typeof tx.itemAId === "object" ? tx.itemAId : null;
-    const itemB = tx.itemBId && typeof tx.itemBId === "object" ? tx.itemBId : null;
+  const requestIds = Array.from(
+    new Set(
+      historyTransactions
+        .map((tx) => tx?.requestId?.toString?.())
+        .filter(Boolean)
+    )
+  );
 
-    const request = tx.requestId && typeof tx.requestId === "object" ? tx.requestId : null;
+  const linkedRequests = requestIds.length
+    ? await ItemRequest.find(
+        { _id: { $in: requestIds } },
+        { _id: 1, itemSnapshot: 1, offeredItemSnapshot: 1 }
+      ).lean()
+    : [];
+
+  const linkedRequestById = new Map(
+    linkedRequests.map((request) => [request._id?.toString?.(), request])
+  );
+
+  const mappedHistory = historyTransactions.map((tx) => {
+    const requestIdKey = tx.requestId?.toString?.() || "";
+    const linkedRequest = linkedRequestById.get(requestIdKey) || null;
+    const giftItem =
+      tx.itemId && typeof tx.itemId === "object" ? tx.itemId : null;
+    const exchangeItemA =
+      tx.itemAId && typeof tx.itemAId === "object" ? tx.itemAId : null;
+    const exchangeItemB =
+      tx.itemBId && typeof tx.itemBId === "object" ? tx.itemBId : null;
+
+    const itemDetails = tx.type === "GIFT" ? normalizeHistoryItemDetails(giftItem) : null;
+    const itemADetails =
+      tx.type === "EXCHANGE" ? normalizeHistoryItemDetails(exchangeItemA) : null;
+    const itemBDetails =
+      tx.type === "EXCHANGE" ? normalizeHistoryItemDetails(exchangeItemB) : null;
+
     const itemSnapshot =
-      request?.itemSnapshot?.title || request?.itemSnapshot?.imageUrl
-        ? request.itemSnapshot
-        : item
-          ? getItemSnapshot(item)
-          : itemA
-            ? getItemSnapshot(itemA)
-            : null;
+      tx.itemSnapshot?.title || tx.itemSnapshot?.imageUrl
+        ? tx.itemSnapshot
+        : linkedRequest?.itemSnapshot?.title || linkedRequest?.itemSnapshot?.imageUrl
+          ? linkedRequest.itemSnapshot
+          : tx.type === "GIFT"
+            ? giftItem
+              ? getItemSnapshot(giftItem)
+              : null
+            : exchangeItemA
+              ? getItemSnapshot(exchangeItemA)
+              : null;
     const offeredItemSnapshot =
-      request?.offeredItemSnapshot?.title || request?.offeredItemSnapshot?.imageUrl
-        ? request.offeredItemSnapshot
-        : itemB
-          ? getItemSnapshot(itemB)
-          : null;
+      tx.offeredItemSnapshot?.title || tx.offeredItemSnapshot?.imageUrl
+        ? tx.offeredItemSnapshot
+        : linkedRequest?.offeredItemSnapshot?.title ||
+            linkedRequest?.offeredItemSnapshot?.imageUrl
+          ? linkedRequest.offeredItemSnapshot
+          : exchangeItemB
+            ? getItemSnapshot(exchangeItemB)
+            : null;
 
-    const itemDetails = normalizeItemDetails(item);
-    const itemADetails = normalizeItemDetails(itemA);
-    const itemBDetails = normalizeItemDetails(itemB);
+    const completedAt = tx.completedAt || tx.updatedAt || tx.createdAt;
 
     return {
-      ...tx,
       id: tx._id?.toString?.() || tx._id,
-      itemId: item?._id?.toString?.() || tx.itemId || null,
-      itemAId: itemA?._id?.toString?.() || tx.itemAId || null,
-      itemBId: itemB?._id?.toString?.() || tx.itemBId || null,
+      _id: tx._id,
+      type: tx.type,
+      requestId: requestIdKey || null,
+      itemId:
+        tx.type === "GIFT"
+          ? giftItem?._id?.toString?.() || tx.itemId?.toString?.() || tx.itemId || null
+          : null,
+      ownerId:
+        tx.type === "GIFT"
+          ? tx.ownerId?.toString?.() || tx.ownerId || null
+          : null,
+      receiverId:
+        tx.type === "GIFT"
+          ? tx.receiverId?.toString?.() || tx.receiverId || null
+          : null,
+      itemAId:
+        tx.type === "EXCHANGE"
+          ? exchangeItemA?._id?.toString?.() ||
+            tx.itemAId?.toString?.() ||
+            tx.itemAId ||
+            null
+          : null,
+      ownerAId:
+        tx.type === "EXCHANGE"
+          ? tx.ownerAId?.toString?.() || tx.ownerAId || null
+          : null,
+      itemBId:
+        tx.type === "EXCHANGE"
+          ? exchangeItemB?._id?.toString?.() ||
+            tx.itemBId?.toString?.() ||
+            tx.itemBId ||
+            null
+          : null,
+      ownerBId:
+        tx.type === "EXCHANGE"
+          ? tx.ownerBId?.toString?.() || tx.ownerBId || null
+          : null,
+      completedAt,
+      createdAt: tx.createdAt,
+      updatedAt: tx.updatedAt,
       itemDetails,
       itemADetails,
       itemBDetails,
       itemSnapshot,
       offeredItemSnapshot,
       thumbnailUrl: itemSnapshot?.imageUrl || "",
-      item: itemDetails || itemADetails,
-      offeredItem: itemBDetails,
+      item: tx.type === "GIFT" ? itemDetails : itemADetails,
+      offeredItem: tx.type === "EXCHANGE" ? itemBDetails : null,
     };
   });
 

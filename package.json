@@ -6,8 +6,10 @@
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
     "test": "node --test",
+    "backfill:marketplace-history": "node scripts/backfill-marketplace-history.js",
     "check:integrity": "node scripts/check-marketplace-integrity.js",
-    "promote:super-admin": "node scripts/promote-super-admin.js"
+    "promote:super-admin": "node scripts/promote-super-admin.js",
+    "fix:request-indexes": "node scripts/fix-request-indexes.js"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",

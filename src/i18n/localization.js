@@ -16,6 +16,7 @@ const CODE_TRANSLATIONS = {
   ka: {
     INTERNAL_ERROR: "შიდა სერვერის შეცდომა",
     BAD_REQUEST: "არასწორი მოთხოვნა",
+    RATE_LIMIT_EXCEEDED: "მოთხოვნების ლიმიტი გადაჭარბებულია",
     VALIDATION_ERROR: "ვალიდაციის შეცდომა",
     MONGOOSE_VALIDATION_ERROR: "ვალიდაციის შეცდომა",
     INVALID_JSON: "JSON ფორმატი არასწორია",
@@ -121,6 +122,8 @@ const CODE_TRANSLATIONS = {
     REQUEST_EXPIRED: "მოთხოვნას ვადა გაუვიდა",
     REQUEST_NOT_ACTIVE: "მოთხოვნა აქტიური არ არის",
     REQUEST_NOT_INACTIVE: "მოთხოვნა არ არის არააქტიურ სტატუსში",
+    REQUEST_DELETE_FORBIDDEN_COMPLETED:
+      "დასრულებული მოთხოვნის წაშლა აკრძალულია",
 
     EXCHANGE_MODE_REQUIRED: "შემოთავაზებული პროდუქტი უნდა იყოს EXCHANGE რეჟიმში",
     EXCHANGE_OFFER_ITEM_INVALID: "შემოთავაზებული პროდუქტი არასწორია",
@@ -173,6 +176,8 @@ const TEXT_TRANSLATIONS = {
     "App version config updated": "აპლიკაციის ვერსიის კონფიგურაცია განახლდა",
     "Donation settings updated": "დონაციის პარამეტრები განახლდა",
     "API is running": "API მუშაობს",
+    "Too many requests, please try again later.":
+      "ძალიან ბევრი მოთხოვნაა, სცადეთ მოგვიანებით.",
 
     "Validation error": "ვალიდაციის შეცდომა",
     "Invalid id": "არასწორი იდენტიფიკატორი",
@@ -281,6 +286,8 @@ const TEXT_TRANSLATIONS = {
     "Request is not approved": "მოთხოვნა დამტკიცებული არ არის",
     "Request is not active": "მოთხოვნა აქტიური არ არის",
     "Request is not inactive": "მოთხოვნა არააქტიური არ არის",
+    "Completed requests cannot be hard deleted":
+      "დასრულებული მოთხოვნის წაშლა აკრძალულია",
     "Request cannot be completed": "მოთხოვნის დასრულება ვერ მოხერხდა",
     "Request cannot be canceled": "მოთხოვნის გაუქმება ვერ მოხერხდა",
     "Weekly gift limit reached": "კვირის საჩუქრის ლიმიტი ამოწურულია",

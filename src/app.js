@@ -24,7 +24,11 @@ import { responseCaptureMiddleware } from "./middlewares/response-capture.middle
 import { requestMetricsMiddleware } from "./middlewares/request-metrics.middleware.js";
 import { adminAuditMiddleware } from "./middlewares/admin-audit.middleware.js";
 
-
+const parsePositiveInt = (value, fallback) => {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) return fallback;
+  return parsed;
+};
 
 const app = express();
 app.set("trust proxy", 1);
@@ -56,10 +60,20 @@ app.use(adminAuditMiddleware);
 
 app.use(
   rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 300,
+    windowMs: parsePositiveInt(process.env.RATE_LIMIT_WINDOW_MS, 15 * 60 * 1000),
+    max: parsePositiveInt(process.env.RATE_LIMIT_MAX, 2000),
     standardHeaders: true,
     legacyHeaders: false,
+    skip: (req) => req.path === "/api/auth/refresh",
+    handler: (req, res) => {
+      const payload = {
+        success: false,
+        message: "Too many requests, please try again later.",
+        code: "RATE_LIMIT_EXCEEDED",
+      };
+      if (req.requestId) payload.requestId = req.requestId;
+      res.status(429).json(payload);
+    },
   })
 );
 

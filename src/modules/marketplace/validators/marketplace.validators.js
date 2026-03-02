@@ -11,6 +11,17 @@ const upperEnum = (values) =>
     return value;
   }, z.enum(values));
 
+const parseBooleanQuery = z.preprocess((value) => {
+  if (value === undefined) return undefined;
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true") return true;
+    if (normalized === "false") return false;
+  }
+  return value;
+}, z.boolean().optional());
+
 export const createItemSchema = z.object({
   title: z.string().trim().min(1),
   description: z.string().trim().min(1),
@@ -105,6 +116,7 @@ export const listRequestsQuerySchema = z.object({
     "COMPLETED",
   ]).optional(),
   type: upperEnum(["GIFT", "EXCHANGE"]).optional(),
+  includeAutoCanceled: parseBooleanQuery,
   sort: z
     .enum(["createdAt_desc", "createdAt_asc", "updatedAt_desc", "updatedAt_asc"])
     .optional(),

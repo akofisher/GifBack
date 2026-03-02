@@ -1,7 +1,5 @@
 import bcrypt from "bcrypt";
-import crypto from "crypto";
 import jwt from "jsonwebtoken";
-import logger from "../../../utils/logger.js";
 import { normalizeLanguage } from "../../../i18n/localization.js";
 import User from "../../user/models/user.model.js";
 import Session from "../models/session.model.js";
@@ -10,276 +8,34 @@ import {
   validateAgreementAcceptanceForRegistration,
 } from "../../agreement/services/agreement.service.js";
 import { AppError, badRequest, conflict, forbidden, notFound, unauthorized } from "../../../utils/appError.js";
-import { getRolePermissions, normalizeRole } from "../../admin/rbac/rbac.js";
-
-const ACCESS_TTL = process.env.ACCESS_TOKEN_TTL || "15m";
-const REFRESH_TTL = process.env.REFRESH_TOKEN_TTL || "365d";
-const parseEnvBoolean = (value, fallback = false) => {
-  if (value === undefined || value === null || value === "") return fallback;
-  const normalized = String(value).trim().toLowerCase();
-  if (["true", "1", "yes", "on"].includes(normalized)) return true;
-  if (["false", "0", "no", "off"].includes(normalized)) return false;
-  return fallback;
-};
-
-const EMAIL_VERIFICATION_REQUIRED = parseEnvBoolean(
-  process.env.EMAIL_VERIFICATION_REQUIRED,
-  true
-);
-const EMAIL_VERIFY_CODE_TTL_MINUTES = Number(
-  process.env.EMAIL_VERIFY_CODE_TTL_MINUTES || 10
-);
-const EMAIL_VERIFY_RESEND_COOLDOWN_SECONDS = Number(
-  process.env.EMAIL_VERIFY_RESEND_COOLDOWN_SECONDS || 60
-);
-const EMAIL_VERIFY_MAX_ATTEMPTS = Number(
-  process.env.EMAIL_VERIFY_MAX_ATTEMPTS || 5
-);
-const EMAIL_VERIFICATION_SECRET =
-  process.env.EMAIL_VERIFICATION_SECRET || process.env.JWT_SECRET || "email-secret";
-const PENDING_REGISTRATION_TTL_HOURS = Number(
-  process.env.PENDING_REGISTRATION_TTL_HOURS || 24
-);
-const PASSWORD_RESET_CODE_TTL_MINUTES = Number(
-  process.env.PASSWORD_RESET_CODE_TTL_MINUTES || 10
-);
-const PASSWORD_RESET_RESEND_COOLDOWN_SECONDS = Number(
-  process.env.PASSWORD_RESET_RESEND_COOLDOWN_SECONDS || 60
-);
-const PASSWORD_RESET_MAX_ATTEMPTS = Number(
-  process.env.PASSWORD_RESET_MAX_ATTEMPTS || 5
-);
-const PASSWORD_RESET_TOKEN_TTL_MINUTES = Number(
-  process.env.PASSWORD_RESET_TOKEN_TTL_MINUTES || 15
-);
-const PASSWORD_RESET_SECRET =
-  process.env.PASSWORD_RESET_SECRET || process.env.JWT_SECRET || "password-reset-secret";
-
-const hashToken = (token) =>
-  crypto.createHash("sha256").update(token).digest("hex");
-
-const hashVerificationCode = (email, code) =>
-  crypto
-    .createHash("sha256")
-    .update(`${email.toLowerCase().trim()}|${code}|${EMAIL_VERIFICATION_SECRET}`)
-    .digest("hex");
-
-const hashPasswordResetCode = (email, code) =>
-  crypto
-    .createHash("sha256")
-    .update(`${email.toLowerCase().trim()}|${code}|${PASSWORD_RESET_SECRET}`)
-    .digest("hex");
-
-const randomVerificationCode = () =>
-  String(crypto.randomInt(100000, 1000000));
-
-const getVerificationExpiryDate = () =>
-  new Date(Date.now() + EMAIL_VERIFY_CODE_TTL_MINUTES * 60 * 1000);
-
-const getPendingRegistrationExpiryDate = () =>
-  new Date(Date.now() + PENDING_REGISTRATION_TTL_HOURS * 60 * 60 * 1000);
-
-const getPasswordResetCodeExpiryDate = () =>
-  new Date(Date.now() + PASSWORD_RESET_CODE_TTL_MINUTES * 60 * 1000);
-
-const getPasswordResetTokenExpiryDate = () =>
-  new Date(Date.now() + PASSWORD_RESET_TOKEN_TTL_MINUTES * 60 * 1000);
-
-const signPasswordResetToken = (user) =>
-  jwt.sign(
-    { id: user._id.toString(), purpose: "password_reset" },
-    PASSWORD_RESET_SECRET,
-    { expiresIn: `${PASSWORD_RESET_TOKEN_TTL_MINUTES}m` }
-  );
-
-const signAccessToken = (user, sessionId = null) =>
-  jwt.sign(
-    {
-      id: user._id.toString(),
-      role: normalizeRole(user.role),
-      lang: normalizeLanguage(user.preferredLanguage),
-      ...(sessionId ? { sid: sessionId.toString() } : {}),
-    },
-    process.env.JWT_SECRET,
-    { expiresIn: ACCESS_TTL }
-  );
-
-const signRefreshToken = (user, sessionId) =>
-  jwt.sign(
-    { id: user._id.toString(), sid: sessionId.toString() },
-    process.env.JWT_REFRESH_SECRET,
-    { expiresIn: REFRESH_TTL }
-  );
-
-const refreshExpiresAt = () => {
-  const days = Number(process.env.REFRESH_COOKIE_DAYS || 365);
-  return new Date(Date.now() + days * 24 * 60 * 60 * 1000);
-};
-
-const toSafeUser = (user) => ({
-  _id: user._id.toString(),
-  firstName: user.firstName,
-  lastName: user.lastName,
-  email: user.email,
-  emailVerified: Boolean(user.emailVerified),
-  phone: user.phone,
-  preferredLanguage: normalizeLanguage(user.preferredLanguage),
-  role: normalizeRole(user.role),
-  permissions: getRolePermissions(user.role),
-  isActive: user.isActive,
-  avatar: user.avatar,
-  stats: user.stats,
-  agreementAcceptance: {
-    version: user.agreementAcceptance?.version || "",
-    acceptedAt: user.agreementAcceptance?.acceptedAt || null,
-  },
-  dateOfBirth: user.dateOfBirth,
-  createdAt: user.createdAt,
-  updatedAt: user.updatedAt,
-});
-
-const buildPendingRegistrationPreview = ({
-  firstName = "",
-  lastName = "",
-  email = "",
-  phone = "",
-  preferredLanguage = "en",
-  dateOfBirth = null,
-}) => ({
-  _id: null,
-  firstName,
-  lastName,
-  email,
-  phone,
-  preferredLanguage: normalizeLanguage(preferredLanguage),
-  emailVerified: false,
-  role: "user",
-  permissions: getRolePermissions("user"),
-  isActive: false,
-  avatar: null,
-  stats: {
-    giving: 0,
-    exchanging: 0,
-    exchanged: 0,
-    given: 0,
-  },
-  agreementAcceptance: {
-    version: "",
-    acceptedAt: null,
-  },
-  dateOfBirth,
-  createdAt: null,
-  updatedAt: null,
-});
-
-const getEmailTransportConfig = () => {
-  const host = process.env.SMTP_HOST || "";
-  const user = process.env.SMTP_USER || "";
-  const pass = process.env.SMTP_PASS || "";
-  const from = process.env.SMTP_FROM || user;
-  const port = Number(process.env.SMTP_PORT || 587);
-  const secure = (process.env.SMTP_SECURE || "false").toLowerCase() === "true";
-
-  return {
-    host,
-    port,
-    secure,
-    user,
-    pass,
-    from,
-  };
-};
-
-const sendCodeEmail = async ({
-  to,
-  code,
-  subject,
-  title,
-  intro,
-  expiresMinutes,
-}) => {
-  const config = getEmailTransportConfig();
-  if (!config.host || !config.user || !config.pass || !config.from) {
-    throw new AppError(
-      "Email service is not configured",
-      500,
-      "EMAIL_NOT_CONFIGURED"
-    );
-  }
-
-  let nodemailer;
-  try {
-    const imported = await import("nodemailer");
-    nodemailer = imported.default || imported;
-  } catch (err) {
-    logger.error({ err }, "nodemailer import failed");
-    throw new AppError(
-      "Email transport is unavailable. Install nodemailer dependency.",
-      500,
-      "EMAIL_TRANSPORT_NOT_AVAILABLE"
-    );
-  }
-
-  const transporter = nodemailer.createTransport({
-    host: config.host,
-    port: config.port,
-    secure: config.secure,
-    auth: {
-      user: config.user,
-      pass: config.pass,
-    },
-  });
-
-  const appName = process.env.APP_NAME || "Marketplace";
-  const emailSubject = `${appName} ${subject}`;
-  const text = `${intro} ${code}. It expires in ${expiresMinutes} minutes.`;
-  const html = `
-    <div style="font-family:Arial,sans-serif;line-height:1.4">
-      <h2>${appName}</h2>
-      <p>${title}</p>
-      <p style="font-size:28px;font-weight:700;letter-spacing:4px">${code}</p>
-      <p>This code expires in ${expiresMinutes} minutes.</p>
-      <p>If you did not request this, ignore this email.</p>
-    </div>
-  `;
-
-  try {
-    await transporter.sendMail({
-      from: config.from,
-      to,
-      subject: emailSubject,
-      text,
-      html,
-    });
-  } catch (err) {
-    logger.error({ err }, "Failed to send verification email");
-    throw new AppError(
-      "Unable to send verification email",
-      502,
-      "EMAIL_DELIVERY_FAILED"
-    );
-  }
-};
-
-const sendVerificationEmail = async ({ to, code }) =>
-  sendCodeEmail({
-    to,
-    code,
-    subject: "email verification code",
-    title: "Your verification code:",
-    intro: "Your verification code is",
-    expiresMinutes: EMAIL_VERIFY_CODE_TTL_MINUTES,
-  });
-
-const sendPasswordResetEmail = async ({ to, code }) =>
-  sendCodeEmail({
-    to,
-    code,
-    subject: "password reset code",
-    title: "Your password reset code:",
-    intro: "Your password reset code is",
-    expiresMinutes: PASSWORD_RESET_CODE_TTL_MINUTES,
-  });
+import {
+  EMAIL_VERIFICATION_REQUIRED,
+  EMAIL_VERIFY_MAX_ATTEMPTS,
+  EMAIL_VERIFY_RESEND_COOLDOWN_SECONDS,
+  PASSWORD_RESET_MAX_ATTEMPTS,
+  PASSWORD_RESET_RESEND_COOLDOWN_SECONDS,
+  PASSWORD_RESET_SECRET,
+  PASSWORD_RESET_TOKEN_TTL_MINUTES,
+} from "./auth.config.js";
+import {
+  getPasswordResetCodeExpiryDate,
+  getPasswordResetTokenExpiryDate,
+  getPendingRegistrationExpiryDate,
+  getVerificationExpiryDate,
+  hashPasswordResetCode,
+  hashToken,
+  hashVerificationCode,
+  randomVerificationCode,
+  refreshExpiresAt,
+  signAccessToken,
+  signPasswordResetToken,
+  signRefreshToken,
+} from "./auth.crypto.js";
+import { sendPasswordResetEmail, sendVerificationEmail } from "./auth.email.service.js";
+import {
+  buildPendingRegistrationPreview,
+  toSafeUser,
+} from "./auth.presenters.js";
 
 const createSessionForUser = async ({
   user,
@@ -424,26 +180,16 @@ const issuePasswordResetCode = async (user, { force = false } = {}) => {
   return { sent: true };
 };
 
-/**
- * ✅ IMPORTANT:
- * We assume Session schema has:
- * revokedAt: { type: Date, default: null }
- *
- * So an "active" session always means:
- * revokedAt === null AND expiresAt > now
- */
-
 const revokeOtherSessionsForDevice = async (userId, deviceId) => {
   const now = new Date();
 
-  await Session.updateMany(
+  await Session.deleteMany(
     {
       userId,
       deviceId,
-      revokedAt: null,          // ✅ FIXED (was $exists:false)
+      revokedAt: null,
       expiresAt: { $gt: now },
-    },
-    { $set: { revokedAt: new Date() } }
+    }
   );
 };
 
@@ -1027,10 +773,7 @@ export const resetPasswordWithToken = async ({
 
   await user.save();
 
-  await Session.updateMany(
-    { userId: user._id, revokedAt: null },
-    { $set: { revokedAt: new Date() } }
-  );
+  await Session.deleteMany({ userId: user._id });
 
   return { reset: true };
 };
@@ -1099,7 +842,7 @@ export const revokeSession = async (refreshToken) => {
     const sessionId = payload.sid;
     if (!sessionId) return;
 
-    await Session.findByIdAndUpdate(sessionId, { revokedAt: new Date() });
+    await Session.deleteOne({ _id: sessionId });
   } catch {
     // ignore
   }
@@ -1107,7 +850,7 @@ export const revokeSession = async (refreshToken) => {
 
 export const revokeSessionBySessionId = async (sessionId) => {
   if (!sessionId) return;
-  await Session.findByIdAndUpdate(sessionId, { revokedAt: new Date() });
+  await Session.deleteOne({ _id: sessionId });
 };
 
 export const listUserSessions = async (userId) => {
@@ -1133,20 +876,14 @@ export const listUserSessions = async (userId) => {
 };
 
 export const revokeUserSessionById = async (userId, sessionId) => {
-  const session = await Session.findOne({ _id: sessionId, userId });
+  const session = await Session.findOne({ _id: sessionId, userId }).select("_id");
   if (!session) {
     throw notFound("Session not found", "SESSION_NOT_FOUND");
   }
-  if (!session.revokedAt) {
-    session.revokedAt = new Date();
-    await session.save();
-  }
+  await Session.deleteOne({ _id: session._id });
   return { revoked: true };
 };
 
 export const revokeAllUserSessions = async (userId) => {
-  await Session.updateMany(
-    { userId, revokedAt: null },
-    { $set: { revokedAt: new Date() } }
-  );
+  await Session.deleteMany({ userId });
 };

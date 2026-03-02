@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  GIFT_LIMIT_PER_WINDOW,
   GIFT_LIMIT_WINDOW_MS,
   ensureWeeklyGiftLimit,
   getGiftLimitRetryAt,
@@ -8,13 +9,17 @@ import {
   isWithinGiftLimitWindow,
 } from "../../src/modules/marketplace/services/gift-limit.service.js";
 
-const buildTransactionModel = ({ result, capture } = {}) => ({
-  findOne(filter) {
+const buildRequestModel = ({ results = [], capture } = {}) => ({
+  find(filter) {
     if (capture) capture.filter = filter;
 
     const query = {
       sort(sortArg) {
         if (capture) capture.sort = sortArg;
+        return query;
+      },
+      limit(limitArg) {
+        if (capture) capture.limit = limitArg;
         return query;
       },
       select(selectArg) {
@@ -25,18 +30,21 @@ const buildTransactionModel = ({ result, capture } = {}) => ({
         if (capture) capture.session = sessionArg;
         return query;
       },
-      lean: async () => result,
+      lean: async () => results,
     };
 
     return query;
   },
 });
 
-const buildQueuedTransactionModel = (queue) => ({
-  findOne() {
-    const current = queue.shift() || null;
+const buildQueuedRequestModel = (queue) => ({
+  find() {
+    const current = queue.shift() || [];
     const query = {
       sort() {
+        return query;
+      },
+      limit() {
         return query;
       },
       select() {
@@ -53,8 +61,11 @@ const buildQueuedTransactionModel = (queue) => ({
 
 test("create request is blocked when weekly gift limit is reached", async () => {
   const now = new Date("2026-02-19T12:00:00.000Z");
-  const completedAt = new Date("2026-02-18T12:00:00.000Z");
-  const model = buildTransactionModel({ result: { completedAt } });
+  const firstCompletedAt = new Date("2026-02-17T12:00:00.000Z");
+  const secondCompletedAt = new Date("2026-02-18T12:00:00.000Z");
+  const model = buildRequestModel({
+    results: [{ completedAt: firstCompletedAt }, { completedAt: secondCompletedAt }],
+  });
 
   await assert.rejects(
     ensureWeeklyGiftLimit({
@@ -62,6 +73,7 @@ test("create request is blocked when weekly gift limit is reached", async () => 
       receiverId: "receiver-1",
       now,
       transactionModel: model,
+      requestModel: buildRequestModel({ results: [] }),
     }),
     (err) => {
       assert.equal(err.code, "GIFT_LIMIT_WEEKLY");
@@ -70,20 +82,59 @@ test("create request is blocked when weekly gift limit is reached", async () => 
       assert.equal(err.details[0]?.field, "retryAt");
       assert.equal(
         err.details[0]?.message,
-        getGiftLimitRetryAt(completedAt).toISOString()
+        getGiftLimitRetryAt(firstCompletedAt).toISOString()
       );
       return true;
     }
   );
 });
 
+test("first and second gifts are allowed, third is blocked", async () => {
+  const now = new Date("2026-02-19T12:00:00.000Z");
+
+  await ensureWeeklyGiftLimit({
+    ownerId: "owner-1",
+    receiverId: "receiver-1",
+    now,
+    transactionModel: buildRequestModel({ results: [] }),
+    requestModel: buildRequestModel({ results: [] }),
+  });
+
+  await ensureWeeklyGiftLimit({
+    ownerId: "owner-1",
+    receiverId: "receiver-1",
+    now,
+    transactionModel: buildRequestModel({
+      results: [{ completedAt: new Date("2026-02-18T12:00:00.000Z") }],
+    }),
+    requestModel: buildRequestModel({ results: [] }),
+  });
+
+  await assert.rejects(
+    ensureWeeklyGiftLimit({
+      ownerId: "owner-1",
+      receiverId: "receiver-1",
+      now,
+      transactionModel: buildRequestModel({
+        results: [
+          { completedAt: new Date("2026-02-17T12:00:00.000Z") },
+          { completedAt: new Date("2026-02-18T12:00:00.000Z") },
+        ],
+      }),
+      requestModel: buildRequestModel({ results: [] }),
+    }),
+    (err) => err?.code === "GIFT_LIMIT_WEEKLY"
+  );
+});
+
 test("approve request is blocked when weekly gift limit is reached", async () => {
   const now = new Date("2026-02-19T12:00:00.000Z");
-  const completedAt = new Date("2026-02-18T12:00:00.000Z");
+  const firstCompletedAt = new Date("2026-02-17T12:00:00.000Z");
+  const secondCompletedAt = new Date("2026-02-18T12:00:00.000Z");
   const capture = {};
   const session = { id: "session-approve" };
-  const model = buildTransactionModel({
-    result: { completedAt },
+  const model = buildRequestModel({
+    results: [{ completedAt: firstCompletedAt }, { completedAt: secondCompletedAt }],
     capture,
   });
 
@@ -94,6 +145,7 @@ test("approve request is blocked when weekly gift limit is reached", async () =>
       session,
       now,
       transactionModel: model,
+      requestModel: buildRequestModel({ results: [] }),
     }),
     (err) => {
       assert.equal(err.code, "GIFT_LIMIT_WEEKLY");
@@ -102,6 +154,7 @@ test("approve request is blocked when weekly gift limit is reached", async () =>
   );
 
   assert.equal(capture.session, session);
+  assert.ok(capture.limit >= GIFT_LIMIT_PER_WINDOW);
 });
 
 test("week rollover boundary allows request exactly at +7 days", async () => {
@@ -115,8 +168,8 @@ test("week rollover boundary allows request exactly at +7 days", async () => {
   );
 
   const capture = {};
-  const model = buildTransactionModel({
-    result: { completedAt: boundaryCompletedAt },
+  const model = buildRequestModel({
+    results: [{ completedAt: boundaryCompletedAt }],
     capture,
   });
 
@@ -125,6 +178,7 @@ test("week rollover boundary allows request exactly at +7 days", async () => {
     receiverId: "receiver-1",
     now,
     transactionModel: model,
+    requestModel: buildRequestModel({ results: [] }),
   });
 
   assert.equal(
@@ -135,9 +189,12 @@ test("week rollover boundary allows request exactly at +7 days", async () => {
 
 test("concurrent gift-limit checks allow only one valid call when one call sees recent completion", async () => {
   const now = new Date("2026-02-19T12:00:00.000Z");
-  const model = buildQueuedTransactionModel([
-    null,
-    { completedAt: new Date("2026-02-19T10:00:00.000Z") },
+  const model = buildQueuedRequestModel([
+    [{ completedAt: new Date("2026-02-18T10:00:00.000Z") }],
+    [
+      { completedAt: new Date("2026-02-18T10:00:00.000Z") },
+      { completedAt: new Date("2026-02-19T10:00:00.000Z") },
+    ],
   ]);
 
   const results = await Promise.allSettled([
@@ -146,12 +203,14 @@ test("concurrent gift-limit checks allow only one valid call when one call sees 
       receiverId: "receiver-1",
       now,
       transactionModel: model,
+      requestModel: buildQueuedRequestModel([[], []]),
     }),
     ensureWeeklyGiftLimit({
       ownerId: "owner-1",
       receiverId: "receiver-1",
       now,
       transactionModel: model,
+      requestModel: buildQueuedRequestModel([[], []]),
     }),
   ]);
 
