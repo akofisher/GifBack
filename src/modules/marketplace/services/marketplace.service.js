@@ -966,6 +966,7 @@ export const createRequest = async (requesterId, itemId, payload) => {
         await ensureWeeklyGiftLimit({
           ownerId: item.ownerId,
           receiverId: requesterId,
+          includeApproved: true,
           session,
         });
       }
@@ -1178,6 +1179,7 @@ export const respondToRequest = async (ownerId, requestId, action) => {
       await ensureWeeklyGiftLimit({
         ownerId: request.ownerId,
         receiverId: request.requesterId,
+        includeApproved: true,
         session,
       });
     }
@@ -1293,10 +1295,99 @@ export const respondToRequest = async (ownerId, requestId, action) => {
   return getRequestWithNames(updatedRequestId);
 };
 
+const expireApprovedRequestAndRestoreItems = async ({
+  request,
+  itemA,
+  itemB,
+  actorId,
+  session,
+  now,
+  source = "APPROVAL_EXPIRED",
+}) => {
+  request.status = "EXPIRED";
+  request.respondedAt = now;
+  request.cancellationReason = null;
+  request.chatId = null;
+  await request.save({ session });
+
+  if (itemA && itemA.reservedByRequestId?.toString() === request._id.toString()) {
+    itemA.status = "ACTIVE";
+    itemA.reservedByRequestId = null;
+    await itemA.save({ session });
+
+    if (request.type === "GIFT") {
+      await User.updateOne(
+        { _id: request.ownerId },
+        { $inc: { "stats.giving": 1 } },
+        { session }
+      );
+    } else {
+      await User.updateOne(
+        { _id: request.ownerId },
+        { $inc: { "stats.exchanging": 1 } },
+        { session }
+      );
+    }
+  }
+
+  if (itemB && itemB.reservedByRequestId?.toString() === request._id.toString()) {
+    itemB.status = "ACTIVE";
+    itemB.reservedByRequestId = null;
+    await itemB.save({ session });
+
+    await User.updateOne(
+      { _id: request.requesterId },
+      { $inc: { "stats.exchanging": 1 } },
+      { session }
+    );
+  }
+
+  await createNotifications(
+    [
+      {
+        userId: request.ownerId,
+        type: "EXPIRED",
+        actorId,
+        requestId: request._id,
+        itemId: request.itemId,
+        offeredItemId: request.offeredItemId || null,
+      },
+      {
+        userId: request.requesterId,
+        type: "EXPIRED",
+        actorId,
+        requestId: request._id,
+        itemId: request.itemId,
+        offeredItemId: request.offeredItemId || null,
+      },
+    ],
+    session
+  );
+
+  await createMarketplaceEvents(
+    [
+      {
+        type: "REQUEST_EXPIRED",
+        actorId,
+        requestId: request._id,
+        itemId: request.itemId,
+        offeredItemId: request.offeredItemId || null,
+        ownerId: request.ownerId,
+        requesterId: request.requesterId,
+        metadata: { source },
+      },
+    ],
+    session
+  );
+
+  await deleteChatByRequestId(request._id, session);
+};
+
 export const confirmRequest = async (userId, requestId) => {
   const session = await mongoose.startSession();
   let updatedRequestId;
   let expired = false;
+  let confirmError = null;
 
   await session.withTransaction(async () => {
     const request = await ItemRequest.findById(requestId).session(session);
@@ -1320,67 +1411,15 @@ export const confirmRequest = async (userId, requestId) => {
         ? await Item.findById(request.offeredItemId).session(session)
         : null;
 
-      request.status = "EXPIRED";
-      request.respondedAt = now;
-      request.cancellationReason = null;
-      request.chatId = null;
-      await request.save({ session });
-
-      if (itemA && itemA.reservedByRequestId?.toString() === request._id.toString()) {
-        itemA.status = "ACTIVE";
-        itemA.reservedByRequestId = null;
-        await itemA.save({ session });
-
-        if (request.type === "GIFT") {
-          await User.updateOne(
-            { _id: request.ownerId },
-            { $inc: { "stats.giving": 1 } },
-            { session }
-          );
-        } else {
-          await User.updateOne(
-            { _id: request.ownerId },
-            { $inc: { "stats.exchanging": 1 } },
-            { session }
-          );
-        }
-      }
-
-      if (itemB && itemB.reservedByRequestId?.toString() === request._id.toString()) {
-        itemB.status = "ACTIVE";
-        itemB.reservedByRequestId = null;
-        await itemB.save({ session });
-
-        await User.updateOne(
-          { _id: request.requesterId },
-          { $inc: { "stats.exchanging": 1 } },
-          { session }
-        );
-      }
-
-      await createNotifications(
-        [
-          {
-            userId: request.ownerId,
-            type: "EXPIRED",
-            actorId: userId,
-            requestId: request._id,
-            itemId: request.itemId,
-            offeredItemId: request.offeredItemId || null,
-          },
-          {
-            userId: request.requesterId,
-            type: "EXPIRED",
-            actorId: userId,
-            requestId: request._id,
-            itemId: request.itemId,
-            offeredItemId: request.offeredItemId || null,
-          },
-        ],
-        session
-      );
-
-      await deleteChatByRequestId(request._id, session);
+      await expireApprovedRequestAndRestoreItems({
+        request,
+        itemA,
+        itemB,
+        actorId: userId,
+        session,
+        now,
+        source: "APPROVAL_TIMEOUT",
+      });
 
       expired = true;
       updatedRequestId = request._id;
@@ -1409,12 +1448,32 @@ export const confirmRequest = async (userId, requestId) => {
     if (!itemA) throw notFound("Item not found", "ITEM_NOT_FOUND");
 
     if (request.type === "GIFT") {
-      await ensureWeeklyGiftLimit({
-        ownerId: request.ownerId,
-        receiverId: request.requesterId,
-        session,
-        now,
-      });
+      try {
+        await ensureWeeklyGiftLimit({
+          ownerId: request.ownerId,
+          receiverId: request.requesterId,
+          session,
+          now,
+        });
+      } catch (err) {
+        if (err?.code !== "GIFT_LIMIT_WEEKLY") {
+          throw err;
+        }
+
+        await expireApprovedRequestAndRestoreItems({
+          request,
+          itemA,
+          itemB,
+          actorId: userId,
+          session,
+          now,
+          source: "GIFT_LIMIT_ON_CONFIRM",
+        });
+        expired = true;
+        confirmError = err;
+        updatedRequestId = request._id;
+        return;
+      }
     }
 
     request.status = "COMPLETED";
@@ -1542,6 +1601,9 @@ export const confirmRequest = async (userId, requestId) => {
   });
 
   session.endSession();
+  if (confirmError) {
+    throw confirmError;
+  }
   if (expired) {
     throw conflict("Request expired", "REQUEST_EXPIRED");
   }

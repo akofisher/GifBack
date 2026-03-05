@@ -59,6 +59,32 @@ const buildQueuedRequestModel = (queue) => ({
   },
 });
 
+const buildRequestModelByStatus = ({ byStatus = {}, capture } = {}) => ({
+  find(filter) {
+    if (capture) {
+      capture.filters = capture.filters || [];
+      capture.filters.push(filter);
+    }
+    const results = byStatus[filter?.status] || [];
+    const query = {
+      sort() {
+        return query;
+      },
+      limit() {
+        return query;
+      },
+      select() {
+        return query;
+      },
+      session() {
+        return query;
+      },
+      lean: async () => results,
+    };
+    return query;
+  },
+});
+
 test("create request is blocked when weekly gift limit is reached", async () => {
   const now = new Date("2026-02-19T12:00:00.000Z");
   const firstCompletedAt = new Date("2026-02-17T12:00:00.000Z");
@@ -220,4 +246,54 @@ test("concurrent gift-limit checks allow only one valid call when one call sees 
   assert.equal(fulfilledCount, 1);
   assert.ok(rejected);
   assert.equal(rejected.reason.code, "GIFT_LIMIT_WEEKLY");
+});
+
+test("create/approve pre-check blocks when approved gifts already consume remaining slot", async () => {
+  const now = new Date("2026-02-19T12:00:00.000Z");
+  const completedAt = new Date("2026-02-18T12:00:00.000Z");
+  const approvedExpiresAt = new Date("2026-02-19T20:00:00.000Z");
+  const requestModel = buildRequestModelByStatus({
+    byStatus: {
+      COMPLETED: [],
+      APPROVED: [{ _id: "req-approved-1", expiresAt: approvedExpiresAt }],
+    },
+  });
+
+  await assert.rejects(
+    ensureWeeklyGiftLimit({
+      ownerId: "owner-1",
+      receiverId: "receiver-1",
+      now,
+      includeApproved: true,
+      transactionModel: buildRequestModel({
+        results: [{ completedAt }],
+      }),
+      requestModel,
+    }),
+    (err) => {
+      assert.equal(err.code, "GIFT_LIMIT_WEEKLY");
+      assert.equal(err.details?.[0]?.field, "retryAt");
+      assert.equal(err.details?.[0]?.message, approvedExpiresAt.toISOString());
+      return true;
+    }
+  );
+});
+
+test("approved gifts with expired expiresAt do not block new request", async () => {
+  const now = new Date("2026-02-19T12:00:00.000Z");
+  const requestModel = buildRequestModelByStatus({
+    byStatus: {
+      COMPLETED: [],
+      APPROVED: [{ _id: "req-approved-expired", expiresAt: new Date("2026-02-18T12:00:00.000Z") }],
+    },
+  });
+
+  await ensureWeeklyGiftLimit({
+    ownerId: "owner-1",
+    receiverId: "receiver-1",
+    now,
+    includeApproved: true,
+    transactionModel: buildRequestModel({ results: [] }),
+    requestModel,
+  });
 });

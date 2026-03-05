@@ -28,6 +28,12 @@ export const isWithinGiftLimitWindow = (completedAt, now = new Date()) => {
   return completedAt.getTime() > getGiftLimitWindowStart(now).getTime();
 };
 
+const isValidFutureDate = (value, now) => {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return false;
+  return date.getTime() > now.getTime();
+};
+
 const findRecentCompletedGifts = async ({
   ownerId,
   receiverId,
@@ -109,6 +115,7 @@ export const ensureWeeklyGiftLimit = async ({
   receiverId,
   session,
   now = new Date(),
+  includeApproved = false,
   transactionModel = ItemTransaction,
   requestModel = ItemRequest,
 }) => {
@@ -121,14 +128,55 @@ export const ensureWeeklyGiftLimit = async ({
     requestModel,
   });
 
-  if (!Array.isArray(recentGifts) || recentGifts.length < GIFT_LIMIT_PER_WINDOW) {
+  const completedSlots = (recentGifts || [])
+    .map((row) => new Date(row?.completedAt))
+    .filter((completedAt) => isWithinGiftLimitWindow(completedAt, now))
+    .map((completedAt) => ({
+      source: "COMPLETED",
+      releaseAt: getGiftLimitRetryAt(completedAt),
+    }));
+
+  let approvedSlots = [];
+  if (includeApproved) {
+    let approvedQuery = requestModel
+      .find({
+        type: "GIFT",
+        status: "APPROVED",
+        ownerId,
+        requesterId: receiverId,
+      })
+      .sort({ expiresAt: 1, approvedAt: 1, _id: 1 })
+      .limit(Math.max(GIFT_LIMIT_PER_WINDOW * 4, GIFT_LIMIT_PER_WINDOW))
+      .select("_id approvedAt expiresAt");
+
+    if (session) {
+      approvedQuery = approvedQuery.session(session);
+    }
+
+    const approvedRows = await approvedQuery.lean();
+    approvedSlots = (approvedRows || [])
+      .filter((row) => isValidFutureDate(row?.expiresAt, now))
+      .map((row) => ({
+        source: "APPROVED",
+        releaseAt: new Date(row.expiresAt),
+      }));
+  }
+
+  const allSlots = [...completedSlots, ...approvedSlots].sort(
+    (left, right) => left.releaseAt.getTime() - right.releaseAt.getTime()
+  );
+
+  if (allSlots.length < GIFT_LIMIT_PER_WINDOW) {
     return;
   }
 
-  const completedAt = new Date(recentGifts[0]?.completedAt);
-  if (!isWithinGiftLimitWindow(completedAt, now)) return;
+  const retryIndex = allSlots.length - GIFT_LIMIT_PER_WINDOW;
+  const retryAt = allSlots[retryIndex]?.releaseAt;
+  if (!(retryAt instanceof Date) || Number.isNaN(retryAt.getTime())) {
+    return;
+  }
 
   throw conflict("Weekly gift limit reached", "GIFT_LIMIT_WEEKLY", [
-    { field: "retryAt", message: getGiftLimitRetryAt(completedAt).toISOString() },
+    { field: "retryAt", message: retryAt.toISOString() },
   ]);
 };

@@ -3,7 +3,7 @@ import {
   getPublicDonations,
   updateAdminDonations,
 } from "../services/donation.service.js";
-import { upsertDonationConfigSchema } from "../validators/donation.validators.js";
+import { parseUpsertDonationConfigPayload } from "../validators/donation.validators.js";
 import {
   buildWeakEtag,
   isRequestFresh,
@@ -45,7 +45,7 @@ export const getAdminDonationsHandler = async (req, res, next) => {
 
 export const updateAdminDonationsHandler = async (req, res, next) => {
   try {
-    const payload = upsertDonationConfigSchema.parse(req.body || {});
+    const payload = parseUpsertDonationConfigPayload(req.body || {});
     const config = await updateAdminDonations({
       userId: req.user.id,
       payload,

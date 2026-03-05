@@ -61,11 +61,16 @@ const ensureDonationConfig = async () => {
 };
 
 const normalizeMethodInput = (method, index) => {
+  const normalizedAccountNumber = method.accountNumber?.trim() || "";
+  const normalizedLink = method.link?.trim() || "";
+  const hasAccountNumber = normalizedAccountNumber.length > 0;
+  const hasLink = normalizedLink.length > 0;
+
   const normalized = {
     label: method.label.trim(),
     labelTranslations: normalizeTranslationsInput(method.labelTranslations),
-    accountNumber: method.accountNumber.trim(),
-    link: (method.link || "").trim(),
+    accountNumber: hasAccountNumber ? normalizedAccountNumber : undefined,
+    link: hasLink ? normalizedLink : undefined,
     isActive: method.isActive !== undefined ? Boolean(method.isActive) : true,
     order: Number.isInteger(method.order) ? method.order : index,
   };
