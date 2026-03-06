@@ -36,6 +36,10 @@ const CODE_TRANSLATIONS = {
 
     USER_NOT_FOUND: "მომხმარებელი ვერ მოიძებნა",
     USER_INACTIVE: "მომხმარებელი გამორთულია",
+    USER_BLOCKED_TEMPORARY:
+      "თქვენი ანგარიში 14 დღით არის დაბლოკილი საზოგადოების წესების დარღვევის გამო. დეტალებისთვის დაუკავშირდით მხარდაჭერას: https://t.me/GiftaApp",
+    USER_BLOCKED_PERMANENT:
+      "თქვენი ანგარიში მუდმივად არის დაბლოკილი საზოგადოების წესების დარღვევის გამო. დეტალებისთვის დაუკავშირდით მხარდაჭერას: https://t.me/GiftaApp",
     INVALID_CREDENTIALS: "ელფოსტა ან პაროლი არასწორია",
     MISSING_DEVICE_ID: "deviceId აუცილებელია",
     DUPLICATE_KEY: "მონაცემი უკვე გამოყენებულია",
@@ -216,6 +220,10 @@ const TEXT_TRANSLATIONS = {
     "Email is already verified": "ელფოსტა უკვე დადასტურებულია",
     "Invalid email or password": "ელფოსტა ან პაროლი არასწორია",
     "User is inactive": "მომხმარებელი გამორთულია",
+    "You are blocked for 14 days because of breaking our community rules. For more information contact our support team: https://t.me/GiftaApp":
+      "თქვენი ანგარიში 14 დღით არის დაბლოკილი საზოგადოების წესების დარღვევის გამო. დეტალებისთვის დაუკავშირდით მხარდაჭერას: https://t.me/GiftaApp",
+    "You are permanently blocked because of breaking our community rules. For more information contact our support team: https://t.me/GiftaApp":
+      "თქვენი ანგარიში მუდმივად არის დაბლოკილი საზოგადოების წესების დარღვევის გამო. დეტალებისთვის დაუკავშირდით მხარდაჭერას: https://t.me/GiftaApp",
     "Email is not verified. Please verify your email first":
       "ელფოსტა არ არის დადასტურებული. გთხოვთ დაადასტუროთ ელფოსტა",
     "Invalid verification code": "ვერიფიკაციის კოდი არასწორია",
@@ -304,6 +312,7 @@ const TEXT_TRANSLATIONS = {
       "countryId და cityId ერთად უნდა იყოს გადმოცემული",
     "At least one field is required":
       "მინიმუმ ერთი ველი აუცილებელია",
+    "Comment is required": "კომენტარი აუცილებელია",
     "Invalid version format": "ვერსიის ფორმატი არასწორია",
     "Version must be numeric dot format, e.g. 1.0.1":
       "ვერსია უნდა იყოს რიცხვითი dot ფორმატში, მაგალითად 1.0.1",

@@ -7,6 +7,7 @@ import PendingRegistration from "../models/pending-registration.model.js";
 import {
   validateAgreementAcceptanceForRegistration,
 } from "../../agreement/services/agreement.service.js";
+import { enforceUserAccessBlock } from "../../user/services/user-block.service.js";
 import { AppError, badRequest, conflict, forbidden, notFound, unauthorized } from "../../../utils/appError.js";
 import {
   EMAIL_VERIFICATION_REQUIRED,
@@ -218,9 +219,7 @@ export const loginUser = async ({
     throw badRequest("deviceId is required", "MISSING_DEVICE_ID");
   }
 
-  if (user.isActive === false) {
-    throw forbidden("User is inactive", "USER_INACTIVE");
-  }
+  await enforceUserAccessBlock(user);
   if (EMAIL_VERIFICATION_REQUIRED && !user.emailVerified) {
     try {
       await issueEmailVerificationCode(user);
@@ -815,9 +814,7 @@ export const refreshAccessToken = async (refreshToken) => {
   if (!user) {
     throw unauthorized("User not found", "USER_NOT_FOUND");
   }
-  if (user.isActive === false) {
-    throw forbidden("User is inactive", "USER_INACTIVE");
-  }
+  await enforceUserAccessBlock(user);
   if (EMAIL_VERIFICATION_REQUIRED && !user.emailVerified) {
     throw forbidden(
       "Email is not verified. Please verify your email first",

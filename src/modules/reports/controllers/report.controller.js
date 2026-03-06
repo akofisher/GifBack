@@ -1,10 +1,12 @@
 import {
+  addAdminReportComment,
   createProductReport,
   getAdminReportById,
   listAdminReports,
   updateAdminReportStatus,
 } from "../services/report.service.js";
 import {
+  addReportCommentSchema,
   createProductReportSchema,
   listAdminReportsSchema,
   updateReportStatusSchema,
@@ -50,6 +52,16 @@ export const updateAdminReportStatusHandler = async (req, res, next) => {
   try {
     const payload = updateReportStatusSchema.parse(req.body);
     const report = await updateAdminReportStatus(req.params.id, payload.status);
+    res.status(200).json({ success: true, report });
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const addAdminReportCommentHandler = async (req, res, next) => {
+  try {
+    const payload = addReportCommentSchema.parse(req.body);
+    const report = await addAdminReportComment(req.params.id, req.user.id, payload.text);
     res.status(200).json({ success: true, report });
   } catch (err) {
     next(err);

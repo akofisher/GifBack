@@ -93,6 +93,7 @@ export const setAdminUserBlockedStateHandler = async (req, res, next) => {
       actorRole: req.user.role,
       targetUserId: req.params.id,
       isActive: payload.isActive,
+      blockType: payload.blockType,
     });
     res.status(200).json({ success: true, user });
   } catch (err) {

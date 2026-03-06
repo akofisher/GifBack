@@ -4,6 +4,28 @@ import {
   REPORT_STATUSES,
 } from "../reports.constants.js";
 
+const reportCommentSchema = new mongoose.Schema(
+  {
+    adminId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+      index: true,
+    },
+    text: {
+      type: String,
+      trim: true,
+      maxlength: 1000,
+      required: true,
+    },
+    createdAt: {
+      type: Date,
+      default: Date.now,
+    },
+  },
+  { _id: true }
+);
+
 const productReportSchema = new mongoose.Schema(
   {
     itemId: {
@@ -34,6 +56,10 @@ const productReportSchema = new mongoose.Schema(
       enum: REPORT_STATUSES,
       default: "OPEN",
       index: true,
+    },
+    comments: {
+      type: [reportCommentSchema],
+      default: [],
     },
   },
   { timestamps: true }

@@ -13,6 +13,10 @@ import Notification from "../../marketplace/models/notification.model.js";
 import ProductReport from "../../reports/models/product-report.model.js";
 import { createMarketplaceEvents } from "../../marketplace/services/event-log.service.js";
 import {
+  USER_BLOCK_TYPES,
+} from "../../user/user-block.constants.js";
+import { buildTemporaryBlockUntil } from "../../user/services/user-block.service.js";
+import {
   canManageTargetRole,
   isSuperAdminRole,
   normalizeRole,
@@ -39,6 +43,26 @@ const adjustActiveListingStat = async ({ ownerId, mode, delta, session }) => {
   if (!ownerId || !mode || !delta) return;
   const field = mode === "GIFT" ? "stats.giving" : "stats.exchanging";
   await User.updateOne({ _id: ownerId }, { $inc: { [field]: delta } }, { session });
+};
+
+const releaseExpiredTemporaryBlocks = async () => {
+  const now = new Date();
+  await User.updateMany(
+    {
+      isActive: false,
+      "accessBlock.type": USER_BLOCK_TYPES.TEMPORARY_14_DAYS,
+      "accessBlock.until": { $lte: now },
+    },
+    {
+      $set: {
+        isActive: true,
+        "accessBlock.type": USER_BLOCK_TYPES.NONE,
+        "accessBlock.until": null,
+        "accessBlock.updatedAt": now,
+        "accessBlock.updatedBy": null,
+      },
+    }
+  );
 };
 
 const cleanupRequestsForDeletedItem = async ({ item, actorId, session }) => {
@@ -188,6 +212,8 @@ const findAdminItemById = async (itemId, session = null) => {
 };
 
 export const getAdminStats = async () => {
+  await releaseExpiredTemporaryBlocks();
+
   const [
     usersTotal,
     usersActive,
@@ -276,6 +302,8 @@ export const getAdminStats = async () => {
 };
 
 export const listAdminUsers = async (query, actorRole = ROLE.ADMIN) => {
+  await releaseExpiredTemporaryBlocks();
+
   const filter = {};
   const normalizedActorRole = normalizeRole(actorRole);
 
@@ -337,6 +365,8 @@ export const listAdminUsers = async (query, actorRole = ROLE.ADMIN) => {
 };
 
 export const listAdminStaff = async (query) => {
+  await releaseExpiredTemporaryBlocks();
+
   const filter = {
     role: { $in: [ROLE.ADMIN, ROLE.SUPER_ADMIN] },
   };
@@ -434,6 +464,7 @@ export const setUserBlockedState = async ({
   actorRole,
   targetUserId,
   isActive,
+  blockType,
 }) => {
   if (adminId.toString() === targetUserId.toString()) {
     throw forbidden("You cannot change your own admin status", "ADMIN_SELF_ACTION_FORBIDDEN");
@@ -455,10 +486,34 @@ export const setUserBlockedState = async ({
     );
   }
 
-  user.isActive = isActive;
-  await user.save();
+  const now = new Date();
+  const normalizedBlockType =
+    blockType === USER_BLOCK_TYPES.TEMPORARY_14_DAYS
+      ? USER_BLOCK_TYPES.TEMPORARY_14_DAYS
+      : USER_BLOCK_TYPES.PERMANENT;
 
-  if (!isActive) {
+  if (isActive) {
+    user.isActive = true;
+    user.accessBlock = {
+      type: USER_BLOCK_TYPES.NONE,
+      until: null,
+      updatedAt: now,
+      updatedBy: adminId,
+    };
+    await user.save();
+  } else {
+    user.isActive = false;
+    user.accessBlock = {
+      type: normalizedBlockType,
+      until:
+        normalizedBlockType === USER_BLOCK_TYPES.TEMPORARY_14_DAYS
+          ? buildTemporaryBlockUntil(now)
+          : null,
+      updatedAt: now,
+      updatedBy: adminId,
+    };
+    await user.save();
+
     await Session.updateMany(
       { userId: user._id, revokedAt: null },
       { $set: { revokedAt: new Date() } }

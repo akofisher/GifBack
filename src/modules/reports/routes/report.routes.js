@@ -3,6 +3,7 @@ import { requireAuth } from "../../auth/middleware/auth.middleware.js";
 import { requirePermission } from "../../admin/middleware/admin.middleware.js";
 import { ADMIN_PERMISSIONS } from "../../admin/rbac/rbac.js";
 import {
+  addAdminReportCommentHandler,
   createProductReportHandler,
   getAdminReportByIdHandler,
   listAdminReportsHandler,
@@ -30,6 +31,12 @@ router.patch(
   requireAuth,
   requirePermission(ADMIN_PERMISSIONS.REPORTS_MANAGE),
   updateAdminReportStatusHandler
+);
+router.post(
+  "/admin/reports/:id/comments",
+  requireAuth,
+  requirePermission(ADMIN_PERMISSIONS.REPORTS_MANAGE),
+  addAdminReportCommentHandler
 );
 
 export default router;

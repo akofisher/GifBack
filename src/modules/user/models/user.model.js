@@ -13,6 +13,22 @@ const userSchema = new mongoose.Schema(
 
     role: { type: String, enum: ["user", "admin", "super_admin"], default: "user" },
     isActive: { type: Boolean, default: true },
+    accessBlock: {
+      type: {
+        type: String,
+        enum: ["NONE", "TEMPORARY_14_DAYS", "PERMANENT"],
+        default: "NONE",
+        index: true,
+      },
+      until: { type: Date, default: null },
+      updatedAt: { type: Date, default: null },
+      updatedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+        default: null,
+        select: false,
+      },
+    },
     preferredLanguage: {
       type: String,
       enum: ["en", "ka"],

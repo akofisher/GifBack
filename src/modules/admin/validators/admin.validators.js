@@ -134,6 +134,7 @@ export const adminListUsersQuerySchema = z.object({
 
 export const adminUserToggleSchema = z.object({
   isActive: z.boolean(),
+  blockType: z.enum(["PERMANENT", "TEMPORARY_14_DAYS"]).optional(),
 });
 
 export const adminListStaffQuerySchema = z.object({

@@ -35,6 +35,10 @@ const reportPopulate = [
       },
     ],
   },
+  {
+    path: "comments.adminId",
+    select: "firstName lastName email role avatar isActive",
+  },
 ];
 
 const formatAdminReport = (report) => {
@@ -58,6 +62,7 @@ const formatAdminReport = (report) => {
 
   const reporterName = reporter ? buildName(reporter.firstName, reporter.lastName) : "";
   const ownerName = itemOwner ? buildName(itemOwner.firstName, itemOwner.lastName) : "";
+  const comments = Array.isArray(report.comments) ? report.comments : [];
 
   return {
     ...report,
@@ -132,6 +137,33 @@ const formatAdminReport = (report) => {
           order: itemCategory.order,
         }
       : null,
+    comments: comments.map((entry) => {
+      const admin =
+        entry?.adminId && typeof entry.adminId === "object" ? entry.adminId : null;
+      const adminName = admin
+        ? buildName(admin.firstName, admin.lastName)
+        : "";
+
+      return {
+        id: entry?._id?.toString?.() || "",
+        text: entry?.text || "",
+        createdAt: entry?.createdAt || null,
+        adminId: admin?._id?.toString?.() || entry?.adminId?.toString?.() || null,
+        adminName,
+        admin: admin
+          ? {
+              id: admin._id?.toString?.() || "",
+              firstName: admin.firstName || "",
+              lastName: admin.lastName || "",
+              name: adminName,
+              email: admin.email || "",
+              role: admin.role || "",
+              isActive: admin.isActive,
+              avatar: admin.avatar || null,
+            }
+          : null,
+      };
+    }),
   };
 };
 
@@ -279,6 +311,34 @@ export const updateAdminReportStatus = async (reportId, status) => {
     reportId,
     { $set: { status } },
     { new: true }
+  )
+    .populate(reportPopulate)
+    .lean();
+
+  if (!report) {
+    throw notFound("Report not found", "REPORT_NOT_FOUND");
+  }
+
+  return formatAdminReport(report);
+};
+
+export const addAdminReportComment = async (reportId, adminId, text) => {
+  if (!mongoose.Types.ObjectId.isValid(reportId)) {
+    throw notFound("Report not found", "REPORT_NOT_FOUND");
+  }
+
+  const report = await ProductReport.findByIdAndUpdate(
+    reportId,
+    {
+      $push: {
+        comments: {
+          adminId,
+          text: text.trim(),
+          createdAt: new Date(),
+        },
+      },
+    },
+    { new: true, runValidators: true }
   )
     .populate(reportPopulate)
     .lean();

@@ -34,3 +34,23 @@ export const listAdminReportsSchema = z.object({
 export const updateReportStatusSchema = z.object({
   status: z.enum(REPORT_STATUS_UPDATES),
 });
+
+const commentValueSchema = z.string().trim().min(1).max(1000);
+
+export const addReportCommentSchema = z
+  .object({
+    comment: commentValueSchema.optional(),
+    text: commentValueSchema.optional(),
+  })
+  .superRefine((payload, ctx) => {
+    if (!payload.comment && !payload.text) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["comment"],
+        message: "Comment is required",
+      });
+    }
+  })
+  .transform((payload) => ({
+    text: (payload.comment || payload.text || "").trim(),
+  }));

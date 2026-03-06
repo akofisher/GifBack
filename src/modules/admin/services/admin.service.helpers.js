@@ -3,6 +3,7 @@ import {
   resolveLocalizedText,
   toPlainTranslations,
 } from "../../../i18n/content.js";
+import { buildPublicUserBlockState } from "../../user/services/user-block.service.js";
 import { getRolePermissions, normalizeRole } from "../rbac/rbac.js";
 
 export const buildSort = (sort) => {
@@ -196,6 +197,7 @@ export const formatAdminItem = (item) => {
 };
 
 export const toSafeUser = (user) => ({
+  ...buildPublicUserBlockState(user),
   _id: user._id?.toString?.() || user._id,
   firstName: user.firstName || "",
   lastName: user.lastName || "",

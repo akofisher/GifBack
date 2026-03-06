@@ -9,8 +9,10 @@ import ItemTransaction from "../../marketplace/models/transaction.model.js";
 import { normalizeLanguage } from "../../../i18n/localization.js";
 import { badRequest, conflict, notFound, unauthorized } from "../../../utils/appError.js";
 import { getRolePermissions, normalizeRole } from "../../admin/rbac/rbac.js";
+import { buildPublicUserBlockState } from "./user-block.service.js";
 
 const toSafeUser = (u) => ({
+  ...buildPublicUserBlockState(u),
   _id: u._id.toString(),
   firstName: u.firstName,
   lastName: u.lastName,

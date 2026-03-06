@@ -1,7 +1,9 @@
 import { normalizeLanguage } from "../../../i18n/localization.js";
 import { getRolePermissions, normalizeRole } from "../../admin/rbac/rbac.js";
+import { buildPublicUserBlockState } from "../../user/services/user-block.service.js";
 
 export const toSafeUser = (user) => ({
+  ...buildPublicUserBlockState(user),
   _id: user._id.toString(),
   firstName: user.firstName,
   lastName: user.lastName,
