@@ -3,12 +3,13 @@ import ItemRequest from "../models/request.model.js";
 import ItemTransaction from "../models/transaction.model.js";
 
 export const GIFT_LIMIT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
-const DEFAULT_GIFT_LIMIT_PER_WINDOW = 2;
 
 const parseGiftLimitPerWindow = () => {
   const parsed = Number(process.env.GIFT_LIMIT_PER_WEEK);
   if (!Number.isInteger(parsed) || parsed <= 0) {
-    return DEFAULT_GIFT_LIMIT_PER_WINDOW;
+    throw new Error(
+      "Invalid environment configuration: GIFT_LIMIT_PER_WEEK must be a positive integer"
+    );
   }
   return parsed;
 };

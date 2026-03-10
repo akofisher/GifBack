@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
-    "test": "node --test",
+    "test": "REQUEST_EXPIRE_HOURS=72 MAX_ACTIVE_GIFT_ITEMS=5 MAX_ACTIVE_EXCHANGE_ITEMS=5 GIFT_LIMIT_PER_WEEK=2 node --test",
     "backfill:marketplace-history": "node scripts/backfill-marketplace-history.js",
     "check:integrity": "node scripts/check-marketplace-integrity.js",
     "promote:super-admin": "node scripts/promote-super-admin.js",

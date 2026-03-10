@@ -6,6 +6,10 @@ const envSchema = z.object({
   MONGO_URI: z.string().trim().min(1),
   JWT_SECRET: z.string().trim().min(1),
   JWT_REFRESH_SECRET: z.string().trim().min(1),
+  REQUEST_EXPIRE_HOURS: z.coerce.number().int().positive(),
+  MAX_ACTIVE_GIFT_ITEMS: z.coerce.number().int().positive(),
+  MAX_ACTIVE_EXCHANGE_ITEMS: z.coerce.number().int().positive(),
+  GIFT_LIMIT_PER_WEEK: z.coerce.number().int().positive(),
 });
 
 let cachedEnv = null;

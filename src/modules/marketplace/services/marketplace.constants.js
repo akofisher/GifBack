@@ -1,39 +1,20 @@
-import logger from "../../../utils/logger.js";
-
-const DEFAULT_EXPIRE_HOURS = 72;
-const DEFAULT_MAX_ACTIVE_GIFT_ITEMS = 5;
-const DEFAULT_MAX_ACTIVE_EXCHANGE_ITEMS = 5;
-
-const parsePositiveInteger = (value, fallback) => {
-  const parsed = Number(value);
+const readRequiredPositiveInt = (envKey) => {
+  const raw = process.env[envKey];
+  const parsed = Number(raw);
   if (!Number.isInteger(parsed) || parsed <= 0) {
-    return fallback;
+    throw new Error(
+      `Invalid environment configuration: ${envKey} must be a positive integer`
+    );
   }
   return parsed;
 };
 
-const parseExpireHours = () => {
-  const raw = Number(process.env.REQUEST_EXPIRE_HOURS);
-  if (Number.isNaN(raw) || raw <= 0) {
-    logger.warn(
-      { value: process.env.REQUEST_EXPIRE_HOURS },
-      "REQUEST_EXPIRE_HOURS is invalid; using default"
-    );
-    return DEFAULT_EXPIRE_HOURS;
-  }
-  return raw;
-};
-
-export const REQUEST_EXPIRE_HOURS = parseExpireHours();
+export const REQUEST_EXPIRE_HOURS = readRequiredPositiveInt("REQUEST_EXPIRE_HOURS");
 export const REQUEST_EXPIRE_MS = REQUEST_EXPIRE_HOURS * 60 * 60 * 1000;
 
-export const MAX_ACTIVE_GIFT_ITEMS = parsePositiveInteger(
-  process.env.MAX_ACTIVE_GIFT_ITEMS,
-  DEFAULT_MAX_ACTIVE_GIFT_ITEMS
-);
-export const MAX_ACTIVE_EXCHANGE_ITEMS = parsePositiveInteger(
-  process.env.MAX_ACTIVE_EXCHANGE_ITEMS,
-  DEFAULT_MAX_ACTIVE_EXCHANGE_ITEMS
+export const MAX_ACTIVE_GIFT_ITEMS = readRequiredPositiveInt("MAX_ACTIVE_GIFT_ITEMS");
+export const MAX_ACTIVE_EXCHANGE_ITEMS = readRequiredPositiveInt(
+  "MAX_ACTIVE_EXCHANGE_ITEMS"
 );
 
 export const DEFAULT_PAGE_LIMIT = 20;
