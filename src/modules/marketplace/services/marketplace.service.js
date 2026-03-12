@@ -1847,14 +1847,16 @@ export const hardDeleteRequest = async (userId, requestId) => {
     throw forbidden("Not allowed", "REQUEST_NOT_PARTICIPANT");
   }
 
-  if (request.status === "PENDING" || request.status === "APPROVED") {
+  const isApprovedWithBothConfirmations =
+    request.status === "APPROVED" &&
+    Boolean(request.ownerConfirmedAt) &&
+    Boolean(request.requesterConfirmedAt);
+
+  if (request.status === "PENDING") {
     throw conflict("Request is not inactive", "REQUEST_NOT_INACTIVE");
   }
-  if (request.status === "COMPLETED") {
-    throw conflict(
-      "Completed requests cannot be hard deleted",
-      "REQUEST_DELETE_FORBIDDEN_COMPLETED"
-    );
+  if (request.status === "APPROVED" && !isApprovedWithBothConfirmations) {
+    throw conflict("Request is not inactive", "REQUEST_NOT_INACTIVE");
   }
 
   await deleteChatByRequestId(request._id);
