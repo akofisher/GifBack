@@ -265,6 +265,18 @@ export const confirmRequestHandler = async (req, res, next) => {
     }
     res.status(200).json({ success: true, request });
   } catch (err) {
+    if (err?.code === "REQUEST_EXPIRED") {
+      try {
+        const expiredRequest = await getRequestDetails(req.user.id, req.params.id);
+        await sendRequestLifecyclePushSafe({
+          event: "REQUEST_EXPIRED",
+          request: expiredRequest,
+          actorId: req.user.id,
+        });
+      } catch {
+        // No-op: if lookup fails we still return REQUEST_EXPIRED to caller.
+      }
+    }
     next(err);
   }
 };

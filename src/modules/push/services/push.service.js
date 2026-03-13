@@ -1,16 +1,12 @@
 import admin from "firebase-admin";
 import logger from "../../../utils/logger.js";
+import { normalizeLanguage } from "../../../i18n/localization.js";
 import PushToken from "../models/push-token.model.js";
 import Chat from "../../chat/models/chat.model.js";
 import User from "../../user/models/user.model.js";
 
-const MAX_MULTICAST_SIZE = 500;
-
-const INVALID_TOKEN_CODES = new Set([
-  "messaging/invalid-registration-token",
-  "messaging/registration-token-not-registered",
-  "messaging/mismatched-credential",
-]);
+const MAX_MESSAGES_PER_BATCH = 500;
+const DEFAULT_CHANNEL_ID = "gifta_high_priority";
 
 const parseBoolean = (value, fallback = null) => {
   if (value === undefined || value === null || value === "") return fallback;
@@ -53,7 +49,7 @@ const toNotificationData = (data = {}) => {
   return normalized;
 };
 
-const splitBatches = (items, batchSize = MAX_MULTICAST_SIZE) => {
+const splitBatches = (items, batchSize = MAX_MESSAGES_PER_BATCH) => {
   const batches = [];
   for (let index = 0; index < items.length; index += batchSize) {
     batches.push(items.slice(index, index + batchSize));
@@ -61,9 +57,21 @@ const splitBatches = (items, batchSize = MAX_MULTICAST_SIZE) => {
   return batches;
 };
 
+const isInvalidTokenError = (error = null) => {
+  const code = String(error?.code || "").toLowerCase();
+  const message = String(error?.message || "").toUpperCase();
+
+  if (code.includes("registration-token-not-registered")) return true;
+  if (code.includes("invalid-registration-token")) return true;
+  if (code.includes("invalid-argument")) return true;
+  if (message.includes("UNREGISTERED")) return true;
+  if (message.includes("INVALID_ARGUMENT")) return true;
+
+  return false;
+};
+
 const getMessagingClient = () => {
   if (messagingInitialized) return messagingClient;
-
   messagingInitialized = true;
 
   const projectId = process.env.FCM_PROJECT_ID || "";
@@ -116,9 +124,7 @@ const enforceUserTokenLimit = async (userId) => {
     .select("_id")
     .lean();
 
-  if (activeTokens.length <= MAX_ACTIVE_PUSH_TOKENS_PER_USER) {
-    return;
-  }
+  if (activeTokens.length <= MAX_ACTIVE_PUSH_TOKENS_PER_USER) return;
 
   const overflow = activeTokens
     .slice(MAX_ACTIVE_PUSH_TOKENS_PER_USER)
@@ -162,43 +168,22 @@ export const registerPushToken = async ({
     }
   );
 
-  let row;
-  try {
-    row = await PushToken.findOneAndUpdate(
-      { userId, deviceId },
-      {
-        $set: {
-          token,
-          platform,
-          appVersion,
-          locale,
-          isActive: true,
-          invalidatedAt: null,
-          lastErrorCode: "",
-          lastSeenAt: now,
-        },
+  const row = await PushToken.findOneAndUpdate(
+    { userId, deviceId },
+    {
+      $set: {
+        token,
+        platform,
+        appVersion,
+        locale: normalizeLanguage(locale, "en"),
+        isActive: true,
+        invalidatedAt: null,
+        lastErrorCode: "",
+        lastSeenAt: now,
       },
-      { new: true, upsert: true, setDefaultsOnInsert: true }
-    );
-  } catch (error) {
-    if (error?.code !== 11000) throw error;
-    row = await PushToken.findOneAndUpdate(
-      { userId, deviceId },
-      {
-        $set: {
-          token,
-          platform,
-          appVersion,
-          locale,
-          isActive: true,
-          invalidatedAt: null,
-          lastErrorCode: "",
-          lastSeenAt: now,
-        },
-      },
-      { new: true }
-    );
-  }
+    },
+    { new: true, upsert: true, setDefaultsOnInsert: true }
+  );
 
   await enforceUserTokenLimit(userId);
 
@@ -235,6 +220,8 @@ export const sendPushToUsers = async ({
   title = "",
   body = "",
   data = {},
+  actorId = null,
+  resolveLocalizedContent = null,
 }) => {
   const normalizedUserIds = Array.from(
     new Set(userIds.map(toObjectIdString).filter(Boolean))
@@ -248,7 +235,7 @@ export const sendPushToUsers = async ({
     userId: { $in: normalizedUserIds },
     isActive: true,
   })
-    .select("_id token userId")
+    .select("_id token userId locale")
     .lean();
 
   if (!rows.length) {
@@ -264,6 +251,28 @@ export const sendPushToUsers = async ({
     uniqueRows.push(row);
   }
 
+  const missingLocaleUserIds = Array.from(
+    new Set(
+      uniqueRows
+        .filter((row) => !normalizeLanguage(row?.locale, ""))
+        .map((row) => toObjectIdString(row?.userId))
+        .filter(Boolean)
+    )
+  );
+
+  const userLocaleById = new Map();
+  if (missingLocaleUserIds.length > 0) {
+    const users = await User.find({ _id: { $in: missingLocaleUserIds } })
+      .select("_id preferredLanguage")
+      .lean();
+    users.forEach((user) => {
+      userLocaleById.set(
+        toObjectIdString(user?._id),
+        normalizeLanguage(user?.preferredLanguage, "en")
+      );
+    });
+  }
+
   const messaging = getMessagingClient();
   if (!messaging) {
     return {
@@ -275,23 +284,54 @@ export const sendPushToUsers = async ({
     };
   }
 
+  const actorKey = toObjectIdString(actorId);
+  const messages = uniqueRows.map((row) => {
+    const recipientUserId = toObjectIdString(row.userId);
+    const locale = normalizeLanguage(
+      row.locale || userLocaleById.get(recipientUserId),
+      "en"
+    );
+    const localized =
+      typeof resolveLocalizedContent === "function"
+        ? resolveLocalizedContent({ locale, userId: recipientUserId }) || {}
+        : { title, body };
+
+    return {
+      token: row.token,
+      notification: {
+        title: String(localized.title || title || "").slice(0, 120),
+        body: String(localized.body || body || "").slice(0, 500),
+      },
+      data: toNotificationData({
+        ...data,
+        source: actorKey && actorKey === recipientUserId ? "mine" : "incoming",
+      }),
+      android: {
+        priority: "high",
+        notification: {
+          channelId: DEFAULT_CHANNEL_ID,
+        },
+      },
+      apns: {
+        headers: {
+          "apns-priority": "10",
+          "apns-push-type": "alert",
+        },
+        payload: {
+          aps: {
+            sound: "default",
+          },
+        },
+      },
+    };
+  });
+
   let sent = 0;
   let failed = 0;
   const invalidTokens = new Set();
-  const payloadData = toNotificationData(data);
-  const batches = splitBatches(uniqueRows, MAX_MULTICAST_SIZE);
 
-  for (const batch of batches) {
-    const tokenBatch = batch.map((row) => row.token);
-    const response = await messaging.sendEachForMulticast({
-      tokens: tokenBatch,
-      notification: {
-        title: String(title || "").slice(0, 120),
-        body: String(body || "").slice(0, 500),
-      },
-      data: payloadData,
-    });
-
+  for (const batch of splitBatches(messages, MAX_MESSAGES_PER_BATCH)) {
+    const response = await messaging.sendEach(batch);
     response.responses.forEach((entry, index) => {
       if (entry.success) {
         sent += 1;
@@ -299,9 +339,8 @@ export const sendPushToUsers = async ({
       }
 
       failed += 1;
-      const code = entry.error?.code || "";
-      if (INVALID_TOKEN_CODES.has(code)) {
-        invalidTokens.add(tokenBatch[index]);
+      if (isInvalidTokenError(entry.error)) {
+        invalidTokens.add(batch[index].token);
       }
     });
   }
@@ -313,7 +352,7 @@ export const sendPushToUsers = async ({
         $set: {
           isActive: false,
           invalidatedAt: new Date(),
-          lastErrorCode: "INVALID_FCM_TOKEN",
+          lastErrorCode: "FCM_UNREGISTERED_OR_INVALID_ARGUMENT",
         },
       }
     );
@@ -336,6 +375,61 @@ export const sendPushToUsersSafe = async (payload) => {
   }
 };
 
+const REQUEST_PUSH_COPY = {
+  en: {
+    REQUEST_CREATED: ({ requesterName, itemTitle, requestType }) => ({
+      title: "New request",
+      body: `${requesterName || "User"} sent a ${requestType} request for "${itemTitle}"`,
+    }),
+    REQUEST_APPROVED: ({ itemTitle }) => ({
+      title: "Request approved",
+      body: `Request for "${itemTitle}" was approved`,
+    }),
+    REQUEST_REJECTED: ({ itemTitle }) => ({
+      title: "Request rejected",
+      body: `Request for "${itemTitle}" was rejected`,
+    }),
+    REQUEST_COMPLETED: ({ itemTitle }) => ({
+      title: "Request completed",
+      body: `"${itemTitle}" request is completed`,
+    }),
+    REQUEST_CANCELED: ({ itemTitle }) => ({
+      title: "Request canceled",
+      body: `"${itemTitle}" request was canceled`,
+    }),
+    REQUEST_EXPIRED: ({ itemTitle }) => ({
+      title: "Request expired",
+      body: `"${itemTitle}" request has expired`,
+    }),
+  },
+  ka: {
+    REQUEST_CREATED: ({ requesterName, itemTitle, requestType }) => ({
+      title: "ახალი მოთხოვნა",
+      body: `${requesterName || "მომხმარებელმა"} გამოგიგზავნათ ${requestType} მოთხოვნა: "${itemTitle}"`,
+    }),
+    REQUEST_APPROVED: ({ itemTitle }) => ({
+      title: "მოთხოვნა დამტკიცდა",
+      body: `"${itemTitle}" მოთხოვნა დამტკიცებულია`,
+    }),
+    REQUEST_REJECTED: ({ itemTitle }) => ({
+      title: "მოთხოვნა უარყოფილია",
+      body: `"${itemTitle}" მოთხოვნა უარყოფილია`,
+    }),
+    REQUEST_COMPLETED: ({ itemTitle }) => ({
+      title: "მოთხოვნა დასრულდა",
+      body: `"${itemTitle}" მოთხოვნა დასრულებულია`,
+    }),
+    REQUEST_CANCELED: ({ itemTitle }) => ({
+      title: "მოთხოვნა გაუქმდა",
+      body: `"${itemTitle}" მოთხოვნა გაუქმდა`,
+    }),
+    REQUEST_EXPIRED: ({ itemTitle }) => ({
+      title: "მოთხოვნას ვადა გაუვიდა",
+      body: `"${itemTitle}" მოთხოვნას ვადა გაუვიდა`,
+    }),
+  },
+};
+
 export const sendRequestLifecyclePushSafe = async ({
   event,
   request,
@@ -345,81 +439,41 @@ export const sendRequestLifecyclePushSafe = async ({
 
   const ownerId = toObjectIdString(request.ownerId || request.owner?.id);
   const requesterId = toObjectIdString(request.requesterId || request.requester?.id);
+  const userIds = Array.from(new Set([ownerId, requesterId].filter(Boolean)));
+  if (!userIds.length) return;
+
   const itemTitle =
     request.itemDetails?.title ||
     request.item?.title ||
     request.itemSnapshot?.title ||
     "item";
-  const actorKey = toObjectIdString(actorId);
-
-  const payloadByEvent = {
-    REQUEST_CREATED: {
-      userIds: [ownerId],
-      title: "New request",
-      body: `${request.requesterName || "User"} sent a ${String(
-        request.type || "request"
-      ).toLowerCase()} request for "${itemTitle}"`,
-    },
-    REQUEST_APPROVED: {
-      userIds: [requesterId],
-      title: "Request approved",
-      body: `Your request for "${itemTitle}" was approved`,
-    },
-    REQUEST_REJECTED: {
-      userIds: [requesterId],
-      title: "Request rejected",
-      body: `Your request for "${itemTitle}" was rejected`,
-    },
-    REQUEST_COMPLETED: {
-      userIds: [ownerId, requesterId],
-      title: "Request completed",
-      body: `"${itemTitle}" request is completed`,
-    },
-    REQUEST_CANCELED: {
-      userIds: [ownerId, requesterId],
-      title: "Request canceled",
-      body: `"${itemTitle}" request was canceled`,
-    },
-    REQUEST_EXPIRED: {
-      userIds: [ownerId, requesterId],
-      title: "Request expired",
-      body: `"${itemTitle}" request has expired`,
-    },
-  };
-
-  const config = payloadByEvent[event];
-  if (!config) return;
-
-  const recipients = config.userIds
-    .map(toObjectIdString)
-    .filter(Boolean)
-    .filter((userId) => !actorKey || userId !== actorKey);
-
-  if (!recipients.length) return;
+  const requesterName = request.requesterName || "User";
+  const requestType = String(request.type || "request").toLowerCase();
 
   await sendPushToUsersSafe({
-    userIds: recipients,
-    title: config.title,
-    body: config.body,
+    userIds,
+    actorId,
     data: {
       type: "REQUEST_UPDATED",
       event,
       requestId: toObjectIdString(request.id || request._id),
       itemId: toObjectIdString(request.itemId),
-      offeredItemId: toObjectIdString(request.offeredItemId),
-      status: request.status || "",
       chatId: toObjectIdString(request.chatId),
+    },
+    resolveLocalizedContent: ({ locale }) => {
+      const copyByEvent = REQUEST_PUSH_COPY[locale] || REQUEST_PUSH_COPY.en;
+      const resolver = copyByEvent[event] || REQUEST_PUSH_COPY.en[event];
+      if (typeof resolver !== "function") {
+        return { title: "Request update", body: itemTitle };
+      }
+      return resolver({ requesterName, itemTitle, requestType });
     },
   });
 };
 
-export const sendChatMessagePushSafe = async ({
-  chatId,
-  senderId,
-  text,
-}) => {
+export const sendChatMessagePushSafe = async ({ chatId, senderId, text }) => {
   try {
-    const chat = await Chat.findById(chatId).select("participants").lean();
+    const chat = await Chat.findById(chatId).select("participants requestId").lean();
     if (!chat?.participants?.length) return;
 
     const sender = await User.findById(senderId)
@@ -430,22 +484,31 @@ export const sendChatMessagePushSafe = async ({
       .join(" ")
       .trim();
 
-    const recipients = chat.participants
-      .map(toObjectIdString)
-      .filter(Boolean)
-      .filter((id) => id !== toObjectIdString(senderId));
-
-    if (!recipients.length) return;
+    const userIds = Array.from(
+      new Set(chat.participants.map(toObjectIdString).filter(Boolean))
+    );
+    if (!userIds.length) return;
 
     await sendPushToUsersSafe({
-      userIds: recipients,
-      title: senderName || "New message",
-      body: String(text || "").trim().slice(0, 500),
+      userIds,
+      actorId: senderId,
       data: {
         type: "CHAT_UPDATED",
         event: "MESSAGE_CREATED",
         chatId: toObjectIdString(chatId),
-        senderId: toObjectIdString(senderId),
+        requestId: toObjectIdString(chat.requestId),
+      },
+      resolveLocalizedContent: ({ locale }) => {
+        if (locale === "ka") {
+          return {
+            title: senderName || "ახალი შეტყობინება",
+            body: String(text || "").trim().slice(0, 500),
+          };
+        }
+        return {
+          title: senderName || "New message",
+          body: String(text || "").trim().slice(0, 500),
+        };
       },
     });
   } catch (error) {
