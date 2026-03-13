@@ -8,6 +8,10 @@ import {
   updateMeHandler,
   updateMyAvatar,
 } from "../controllers/user.controller.js";
+import {
+  registerPushTokenHandler,
+  removePushTokenByDeviceHandler,
+} from "../../push/controllers/push.controller.js";
 
 const router = Router();
 
@@ -19,6 +23,12 @@ router.patch("/me/avatar", protect, updateMyAvatar);
 router.get("/me", requireAuth, me);
 router.patch("/me", requireAuth, updateMeHandler);
 router.patch("/me/password", requireAuth, changeMyPasswordHandler);
+router.post("/me/push-tokens", requireAuth, registerPushTokenHandler);
+router.delete(
+  "/me/push-tokens/:deviceId",
+  requireAuth,
+  removePushTokenByDeviceHandler
+);
 router.delete("/me", requireAuth, deleteMeHandler);
 
 export default router;

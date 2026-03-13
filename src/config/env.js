@@ -14,6 +14,11 @@ const envSchema = z.object({
   CDN_BASE_URL: z.string().trim().min(1).optional(),
   MEDIA_MAX_UPLOAD_BYTES: z.coerce.number().int().positive().optional(),
   MEDIA_ALLOWED_FOLDERS: z.string().trim().min(1).optional(),
+  FCM_ENABLED: z.string().trim().min(1).optional(),
+  FCM_PROJECT_ID: z.string().trim().min(1).optional(),
+  FCM_CLIENT_EMAIL: z.string().trim().min(1).optional(),
+  FCM_PRIVATE_KEY: z.string().trim().min(1).optional(),
+  MAX_ACTIVE_PUSH_TOKENS_PER_USER: z.coerce.number().int().positive().optional(),
 });
 
 let cachedEnv = null;

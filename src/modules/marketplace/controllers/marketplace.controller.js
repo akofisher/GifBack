@@ -33,6 +33,7 @@ import {
   isRequestFresh,
   setCacheValidators,
 } from "../../../utils/httpCache.js";
+import { sendRequestLifecyclePushSafe } from "../../push/services/push.service.js";
 
 export const listCategoriesHandler = async (req, res, next) => {
   try {
@@ -187,6 +188,11 @@ export const createRequestHandler = async (req, res, next) => {
   try {
     const data = createRequestSchema.parse(req.body);
     const request = await createRequest(req.user.id, req.params.itemId, data);
+    await sendRequestLifecyclePushSafe({
+      event: "REQUEST_CREATED",
+      request,
+      actorId: req.user.id,
+    });
     res.status(201).json({ success: true, request });
   } catch (err) {
     next(err);
@@ -236,6 +242,11 @@ export const respondRequestHandler = async (req, res, next) => {
   try {
     const data = respondSchema.parse(req.body);
     const request = await respondToRequest(req.user.id, req.params.id, data.action);
+    await sendRequestLifecyclePushSafe({
+      event: request.status === "APPROVED" ? "REQUEST_APPROVED" : "REQUEST_REJECTED",
+      request,
+      actorId: req.user.id,
+    });
     res.status(200).json({ success: true, request });
   } catch (err) {
     next(err);
@@ -245,6 +256,13 @@ export const respondRequestHandler = async (req, res, next) => {
 export const confirmRequestHandler = async (req, res, next) => {
   try {
     const request = await confirmRequest(req.user.id, req.params.id);
+    if (request?.status === "COMPLETED") {
+      await sendRequestLifecyclePushSafe({
+        event: "REQUEST_COMPLETED",
+        request,
+        actorId: req.user.id,
+      });
+    }
     res.status(200).json({ success: true, request });
   } catch (err) {
     next(err);
@@ -254,6 +272,11 @@ export const confirmRequestHandler = async (req, res, next) => {
 export const cancelRequestHandler = async (req, res, next) => {
   try {
     const request = await cancelRequest(req.user.id, req.params.id);
+    await sendRequestLifecyclePushSafe({
+      event: "REQUEST_CANCELED",
+      request,
+      actorId: req.user.id,
+    });
     res.status(200).json({ success: true, request });
   } catch (err) {
     next(err);
@@ -263,6 +286,11 @@ export const cancelRequestHandler = async (req, res, next) => {
 export const deleteRequestHandler = async (req, res, next) => {
   try {
     const request = await deleteRequest(req.user.id, req.params.id);
+    await sendRequestLifecyclePushSafe({
+      event: "REQUEST_CANCELED",
+      request,
+      actorId: req.user.id,
+    });
     res.status(200).json({ success: true, request });
   } catch (err) {
     next(err);

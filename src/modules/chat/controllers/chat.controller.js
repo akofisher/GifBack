@@ -4,6 +4,7 @@ import {
   listMessages,
   sendMessage,
 } from "../services/chat.service.js";
+import { sendChatMessagePushSafe } from "../../push/services/push.service.js";
 import {
   listChatsQuerySchema,
   listMessagesQuerySchema,
@@ -52,6 +53,11 @@ export const sendMessageHandler = async (req, res, next) => {
   try {
     const { text } = req.body || {};
     const message = await sendMessage(req.user.id, req.params.id, text);
+    await sendChatMessagePushSafe({
+      chatId: message.chatId,
+      senderId: req.user.id,
+      text: message.text,
+    });
     res.status(201).json({ success: true, message });
   } catch (err) {
     next(err);
