@@ -16,6 +16,18 @@ const parseBooleanQuery = z.preprocess((value) => {
   return value;
 }, z.boolean().optional());
 
+const imageInputSchema = z.object({
+  url: z.string().min(1),
+  path: z.string().optional(),
+  filename: z.string().optional(),
+  mimeType: z.string().optional(),
+  size: z.number().nonnegative().optional(),
+  provider: z.string().optional(),
+  publicId: z.string().optional(),
+  width: z.number().optional(),
+  height: z.number().optional(),
+});
+
 export const adminListItemsQuerySchema = z.object({
   itemId: z.string().trim().optional(),
   status: z.enum(["ACTIVE", "RESERVED", "COMPLETED", "REMOVED"]).optional(),
@@ -37,14 +49,7 @@ export const adminUpdateItemSchema = z
     cityId: objectIdSchema.optional(),
     address: z.string().trim().max(300).optional(),
     images: z
-      .array(
-        z.object({
-          url: z.string().min(1),
-          publicId: z.string().optional(),
-          width: z.number().optional(),
-          height: z.number().optional(),
-        })
-      )
+      .array(imageInputSchema)
       .min(1)
       .optional(),
   })

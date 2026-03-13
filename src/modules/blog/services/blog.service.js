@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import { badRequest, notFound } from "../../../utils/appError.js";
 import Blog from "../models/blog.model.js";
+import { deleteMediaAssets, diffMediaRefs } from "../../media/media.service.js";
 import {
   normalizeTranslationsInput,
   resolveLocalizedText,
@@ -66,6 +67,22 @@ const hasNonEmptyLink = (value) =>
 
 const hasAnyImage = ({ images, coverImage }) =>
   (Array.isArray(images) && images.length > 0) || Boolean(coverImage?.url);
+
+const collectMediaRefs = ({ images, coverImage }) => {
+  const refs = [];
+  if (Array.isArray(images)) refs.push(...images);
+  if (coverImage) refs.push(coverImage);
+  return refs;
+};
+
+const cleanupMediaAssetsSafely = async (mediaRefs = []) => {
+  if (!Array.isArray(mediaRefs) || !mediaRefs.length) return;
+  try {
+    await deleteMediaAssets(mediaRefs);
+  } catch {
+    // Keep content operation successful even if media cleanup fails.
+  }
+};
 
 const ensureBlogHasRenderableMedia = ({ link, images, coverImage }) => {
   if (hasNonEmptyLink(link) || hasAnyImage({ images, coverImage })) return;
@@ -245,6 +262,10 @@ export const getBlogForAdmin = async (blogId, locale = "en") => {
 export const updateBlogByAdmin = async ({ blogId, payload, locale = "en" }) => {
   const blog = await Blog.findById(blogId);
   if (!blog) throw notFound("Blog not found", "BLOG_NOT_FOUND");
+  const previousMediaRefs = collectMediaRefs({
+    images: blog.images || [],
+    coverImage: blog.coverImage,
+  });
 
   if (payload.title !== undefined) blog.title = payload.title.trim();
   if (payload.titleTranslations !== undefined) {
@@ -294,14 +315,24 @@ export const updateBlogByAdmin = async ({ blogId, payload, locale = "en" }) => {
   }
 
   await blog.save();
+  const nextMediaRefs = collectMediaRefs({
+    images: blog.images || [],
+    coverImage: blog.coverImage,
+  });
+  await cleanupMediaAssetsSafely(diffMediaRefs(previousMediaRefs, nextMediaRefs));
   return findBlogForAdmin(blog._id, locale);
 };
 
 export const deleteBlogByAdmin = async (blogId) => {
-  const blog = await Blog.findById(blogId).select("_id");
+  const blog = await Blog.findById(blogId).select("_id images coverImage");
   if (!blog) throw notFound("Blog not found", "BLOG_NOT_FOUND");
+  const mediaRefs = collectMediaRefs({
+    images: blog.images || [],
+    coverImage: blog.coverImage,
+  });
 
   await Blog.deleteOne({ _id: blog._id });
+  await cleanupMediaAssetsSafely(mediaRefs);
   return { deleted: true, id: blog._id.toString() };
 };
 

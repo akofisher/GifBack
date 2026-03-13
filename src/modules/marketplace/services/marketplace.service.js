@@ -46,8 +46,10 @@ import {
   MAX_ACTIVE_EXCHANGE_ITEMS,
   MAX_ACTIVE_GIFT_ITEMS,
   REQUEST_CANCELLATION_REASONS,
+  REQUEST_EXPIRE_HOURS,
   REQUEST_EXPIRE_MS,
 } from "./marketplace.constants.js";
+import { deleteMediaAssets, diffMediaRefs } from "../../media/media.service.js";
 
 export { formatRequestWithUsers, resolveViewerRequestState } from "./marketplace.presenters.js";
 export { deriveGiftPolicyOwnerState } from "./marketplace.viewer-guard.service.js";
@@ -55,6 +57,16 @@ export { deriveGiftPolicyOwnerState } from "./marketplace.viewer-guard.service.j
 const createNotifications = async (entries, session) => {
   if (!entries.length) return;
   await Notification.insertMany(entries, { session });
+};
+
+const cleanupMediaAssetsSafely = async (mediaRefs, context = {}) => {
+  if (!Array.isArray(mediaRefs) || mediaRefs.length === 0) return;
+
+  try {
+    await deleteMediaAssets(mediaRefs);
+  } catch (error) {
+    logger.warn({ err: error, ...context }, "Media cleanup skipped after operation");
+  }
 };
 
 const shouldHideAutoCanceledConflict = (options = {}) =>
@@ -594,20 +606,36 @@ export const updateItem = async (ownerId, itemId, payload) => {
 
   if (payload.title !== undefined) item.title = payload.title.trim();
   if (payload.description !== undefined) item.description = payload.description.trim();
-  if (payload.images !== undefined) item.images = payload.images;
+  const previousImages = Array.isArray(item.images)
+    ? item.images.map((image) => image?.toObject?.() || image)
+    : [];
+  let removedImages = [];
+  if (payload.images !== undefined) {
+    removedImages = diffMediaRefs(previousImages, payload.images);
+    item.images = payload.images;
+  }
   if (payload.address !== undefined) item.address = payload.address.trim();
 
   await item.save();
+  await cleanupMediaAssetsSafely(removedImages, {
+    itemId: item._id,
+    ownerId,
+    source: "updateItem",
+  });
   return getItemWithOwner(item._id);
 };
 
 export const deleteItem = async (ownerId, itemId) => {
   const session = await mongoose.startSession();
   let updatedItem;
+  let itemImagesToDelete = [];
 
   await session.withTransaction(async () => {
     const item = await Item.findById(itemId).session(session);
     if (!item) throw notFound("Item not found", "ITEM_NOT_FOUND");
+    itemImagesToDelete = Array.isArray(item.images)
+      ? item.images.map((image) => image?.toObject?.() || image)
+      : [];
 
     if (item.ownerId.toString() !== ownerId.toString()) {
       throw forbidden("Not allowed", "FORBIDDEN");
@@ -933,6 +961,11 @@ export const deleteItem = async (ownerId, itemId) => {
   });
 
   session.endSession();
+  await cleanupMediaAssetsSafely(itemImagesToDelete, {
+    itemId,
+    ownerId,
+    source: "deleteItem",
+  });
   return updatedItem;
 };
 

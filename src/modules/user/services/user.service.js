@@ -6,6 +6,7 @@ import User from "../models/user.model.js";
 import Item from "../../marketplace/models/item.model.js";
 import ItemRequest from "../../marketplace/models/request.model.js";
 import ItemTransaction from "../../marketplace/models/transaction.model.js";
+import { deleteMediaAssets, diffMediaRefs } from "../../media/media.service.js";
 import { normalizeLanguage } from "../../../i18n/localization.js";
 import { badRequest, conflict, notFound, unauthorized } from "../../../utils/appError.js";
 import { getRolePermissions, normalizeRole } from "../../admin/rbac/rbac.js";
@@ -160,6 +161,7 @@ export const updateMe = async (userId, payload) => {
   if (!user) {
     throw notFound("User not found", "USER_NOT_FOUND");
   }
+  const previousAvatar = user.avatar ? [user.avatar.toObject?.() || user.avatar] : [];
 
   if (!payload.currentPassword) {
     throw badRequest("Current password is required", "MISSING_CURRENT_PASSWORD");
@@ -209,17 +211,36 @@ export const updateMe = async (userId, payload) => {
     user.dateOfBirth = new Date(payload.dateOfBirth + "T00:00:00.000Z");
   }
 
-  // avatar: url and/or base64
-  if (payload.avatar?.url !== undefined) {
+  if (payload.avatar !== undefined) {
     user.avatar = user.avatar || {};
-    user.avatar.url = payload.avatar.url || "";
-  }
-  if (payload.avatar?.base64 !== undefined) {
-    user.avatar = user.avatar || {};
-    user.avatar.base64 = payload.avatar.base64 || "";
+
+    if (payload.avatar.url !== undefined) {
+      user.avatar.url = payload.avatar.url || "";
+    }
+    if (payload.avatar.path !== undefined) {
+      user.avatar.path = payload.avatar.path || "";
+    }
+    if (payload.avatar.filename !== undefined) {
+      user.avatar.filename = payload.avatar.filename || "";
+    }
+    if (payload.avatar.mimeType !== undefined) {
+      user.avatar.mimeType = payload.avatar.mimeType || "";
+    }
+    if (payload.avatar.size !== undefined) {
+      user.avatar.size = payload.avatar.size ?? null;
+    }
+    if (payload.avatar.provider !== undefined) {
+      user.avatar.provider = payload.avatar.provider || "local";
+    }
+    if (payload.avatar.base64 !== undefined) {
+      user.avatar.base64 = payload.avatar.base64 || "";
+    }
   }
 
   await user.save();
+  if (payload.avatar !== undefined) {
+    await deleteMediaAssets(diffMediaRefs(previousAvatar, [user.avatar]));
+  }
 
   const fresh = await User.findById(userId).lean();
   return toSafeUser(fresh);
@@ -318,6 +339,7 @@ export const deleteMe = async (userId, currentPassword) => {
   if (!user) {
     throw notFound("User not found", "USER_NOT_FOUND");
   }
+  const avatarToDelete = user.avatar ? [user.avatar.toObject?.() || user.avatar] : [];
 
   const ok = await bcrypt.compare(currentPassword, user.password);
   if (!ok) {
@@ -329,6 +351,7 @@ export const deleteMe = async (userId, currentPassword) => {
   }
 
   await User.deleteOne({ _id: userId });
+  await deleteMediaAssets(avatarToDelete);
 
   return { deleted: true };
 };

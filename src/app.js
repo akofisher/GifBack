@@ -19,6 +19,7 @@ import appVersionRoutes from "./modules/app-update/routes/app-version.routes.js"
 import agreementRoutes from "./modules/agreement/routes/agreement.routes.js";
 import donationRoutes from "./modules/donation/routes/donation.routes.js";
 import observabilityRoutes from "./modules/observability/routes/observability.routes.js";
+import mediaRoutes from "./modules/media/media.routes.js";
 import { requestContextMiddleware } from "./middlewares/request-context.middleware.js";
 import { responseCaptureMiddleware } from "./middlewares/response-capture.middleware.js";
 import { requestMetricsMiddleware } from "./middlewares/request-metrics.middleware.js";
@@ -100,6 +101,7 @@ app.use("/api", appVersionRoutes);
 app.use("/api", agreementRoutes);
 app.use("/api", donationRoutes);
 app.use("/api", observabilityRoutes);
+app.use("/api/media", mediaRoutes);
 
 app.use((req, res, next) => {
   next(notFound("Route not found", "ROUTE_NOT_FOUND"));

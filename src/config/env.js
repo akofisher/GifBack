@@ -10,6 +10,10 @@ const envSchema = z.object({
   MAX_ACTIVE_GIFT_ITEMS: z.coerce.number().int().positive(),
   MAX_ACTIVE_EXCHANGE_ITEMS: z.coerce.number().int().positive(),
   GIFT_LIMIT_PER_WEEK: z.coerce.number().int().positive(),
+  CDN_ROOT: z.string().trim().min(1).optional(),
+  CDN_BASE_URL: z.string().trim().min(1).optional(),
+  MEDIA_MAX_UPLOAD_BYTES: z.coerce.number().int().positive().optional(),
+  MEDIA_ALLOWED_FOLDERS: z.string().trim().min(1).optional(),
 });
 
 let cachedEnv = null;

@@ -3,6 +3,11 @@ import mongoose from "mongoose";
 const imageSchema = new mongoose.Schema(
   {
     url: { type: String, required: true },
+    path: { type: String, default: "" },
+    filename: { type: String, default: "" },
+    mimeType: { type: String, default: "" },
+    size: { type: Number, default: null },
+    provider: { type: String, default: "local" },
     publicId: { type: String, default: "" },
     width: { type: Number },
     height: { type: Number },

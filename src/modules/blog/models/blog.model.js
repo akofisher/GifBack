@@ -4,6 +4,11 @@ const imageSchema = new mongoose.Schema(
   {
     url: { type: String, required: true },
     link: { type: String, default: "", trim: true },
+    path: { type: String, default: "" },
+    filename: { type: String, default: "" },
+    mimeType: { type: String, default: "" },
+    size: { type: Number, default: null },
+    provider: { type: String, default: "local" },
     publicId: { type: String, default: "" },
     width: { type: Number, default: null },
     height: { type: Number, default: null },

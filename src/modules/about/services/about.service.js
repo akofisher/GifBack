@@ -1,5 +1,6 @@
 import { notFound } from "../../../utils/appError.js";
 import About from "../models/about.model.js";
+import { deleteMediaAssets, diffMediaRefs } from "../../media/media.service.js";
 import {
   normalizeTranslationsInput,
   resolveLocalizedText,
@@ -7,6 +8,15 @@ import {
 } from "../../../i18n/content.js";
 
 const ABOUT_KEY = "ABOUT_US";
+
+const cleanupMediaAssetsSafely = async (mediaRefs = []) => {
+  if (!Array.isArray(mediaRefs) || !mediaRefs.length) return;
+  try {
+    await deleteMediaAssets(mediaRefs);
+  } catch {
+    // Keep About API successful even if file cleanup fails.
+  }
+};
 
 const buildName = (firstName, lastName) =>
   [firstName, lastName].filter(Boolean).join(" ").trim();
@@ -167,11 +177,14 @@ export const createAboutEntry = async ({ userId, payload, locale = "en" }) => {
   const existing = await findExistingAbout();
 
   if (existing) {
+    const previousImage = existing.image ? [existing.image] : [];
     applyPayload(existing, payload);
     existing.key = ABOUT_KEY;
     existing.updatedBy = userId;
     if (!existing.createdBy) existing.createdBy = userId;
     await existing.save();
+    const nextImage = existing.image ? [existing.image] : [];
+    await cleanupMediaAssetsSafely(diffMediaRefs(previousImage, nextImage));
 
     const updated = await About.findById(existing._id)
       .populate(basePopulate)
@@ -221,6 +234,7 @@ export const updateAboutEntry = async ({
 }) => {
   const entry = await findExistingAbout();
   if (!entry) throw notFound("About data not found", "ABOUT_NOT_FOUND");
+  const previousImage = entry.image ? [entry.image] : [];
 
   applyPayload(entry, payload, { hasSocialLinks });
   entry.key = ABOUT_KEY;
@@ -228,6 +242,8 @@ export const updateAboutEntry = async ({
   if (!entry.createdBy) entry.createdBy = userId;
 
   await entry.save();
+  const nextImage = entry.image ? [entry.image] : [];
+  await cleanupMediaAssetsSafely(diffMediaRefs(previousImage, nextImage));
   const updated = await About.findById(entry._id).populate(basePopulate).lean();
   return formatEntry(updated, locale);
 };
@@ -235,8 +251,10 @@ export const updateAboutEntry = async ({
 export const deleteAboutEntry = async () => {
   const entry = await findExistingAbout();
   if (!entry) throw notFound("About data not found", "ABOUT_NOT_FOUND");
+  const imageRefs = entry.image ? [entry.image] : [];
 
   await About.deleteOne({ _id: entry._id });
+  await cleanupMediaAssetsSafely(imageRefs);
   return { deleted: true, id: entry._id.toString() };
 };
 

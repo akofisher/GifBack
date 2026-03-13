@@ -2,6 +2,11 @@ import { z } from "zod";
 
 const imageSchema = z.object({
   url: z.string().min(1),
+  path: z.string().optional(),
+  filename: z.string().optional(),
+  mimeType: z.string().optional(),
+  size: z.number().nonnegative().optional(),
+  provider: z.string().optional(),
   publicId: z.string().optional(),
   width: z.number().optional(),
   height: z.number().optional(),

@@ -33,10 +33,20 @@ import {
   formatLocationCountry,
   toSafeUser,
 } from "./admin.service.helpers.js";
+import { deleteMediaAssets, diffMediaRefs } from "../../media/media.service.js";
 
 const createNotifications = async (entries, session) => {
   if (!entries.length) return;
   await Notification.insertMany(entries, { session });
+};
+
+const cleanupMediaAssetsSafely = async (mediaRefs = []) => {
+  if (!Array.isArray(mediaRefs) || mediaRefs.length === 0) return;
+  try {
+    await deleteMediaAssets(mediaRefs);
+  } catch {
+    // Keep admin operation successful even if file cleanup fails.
+  }
 };
 
 const adjustActiveListingStat = async ({ ownerId, mode, delta, session }) => {
@@ -532,7 +542,7 @@ export const deleteUserByAdmin = async ({ adminId, targetUserId }) => {
   const actor = await User.findById(adminId).select("role");
   if (!actor) throw notFound("User not found", "USER_NOT_FOUND");
 
-  const user = await User.findById(targetUserId).select("_id role");
+  const user = await User.findById(targetUserId).select("_id role avatar");
   if (!user) throw notFound("User not found", "USER_NOT_FOUND");
 
   if (
@@ -571,6 +581,8 @@ export const deleteUserByAdmin = async ({ adminId, targetUserId }) => {
     Notification.deleteMany({ userId: user._id }),
     User.deleteOne({ _id: user._id }),
   ]);
+
+  await cleanupMediaAssetsSafely(user.avatar ? [user.avatar] : []);
 
   return { deleted: true, id: user._id.toString() };
 };
@@ -859,20 +871,32 @@ export const updateAdminItem = async (itemId, payload) => {
   }
   if (payload.title !== undefined) item.title = payload.title.trim();
   if (payload.description !== undefined) item.description = payload.description.trim();
-  if (payload.images !== undefined) item.images = payload.images;
+  const previousImages = Array.isArray(item.images)
+    ? item.images.map((image) => image?.toObject?.() || image)
+    : [];
+  let removedImages = [];
+  if (payload.images !== undefined) {
+    removedImages = diffMediaRefs(previousImages, payload.images);
+    item.images = payload.images;
+  }
   if (payload.address !== undefined) item.address = payload.address.trim();
 
   await item.save();
+  await cleanupMediaAssetsSafely(removedImages);
   return getAdminItemById(item._id);
 };
 
 export const deleteAdminItem = async ({ itemId, actorId }) => {
   const session = await mongoose.startSession();
   let deleted;
+  let itemImagesToDelete = [];
 
   await session.withTransaction(async () => {
     const item = await Item.findById(itemId).session(session);
     if (!item) throw notFound("Item not found", "ITEM_NOT_FOUND");
+    itemImagesToDelete = Array.isArray(item.images)
+      ? item.images.map((image) => image?.toObject?.() || image)
+      : [];
 
     const deletedView = await findAdminItemById(item._id, session);
     deleted = formatAdminItem(deletedView);
@@ -909,5 +933,6 @@ export const deleteAdminItem = async ({ itemId, actorId }) => {
   });
 
   session.endSession();
+  await cleanupMediaAssetsSafely(itemImagesToDelete);
   return deleted || { _id: itemId };
 };

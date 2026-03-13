@@ -37,6 +37,11 @@ const userSchema = new mongoose.Schema(
 
     avatar: {
       url: { type: String, default: "https://i.pravatar.cc/300" },
+      path: { type: String, default: "" },
+      filename: { type: String, default: "" },
+      mimeType: { type: String, default: "" },
+      size: { type: Number, default: null },
+      provider: { type: String, default: "local" },
       publicId: { type: String, default: "" },
       base64: { type: String, default: "" },
     },

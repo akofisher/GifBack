@@ -22,6 +22,18 @@ const parseBooleanQuery = z.preprocess((value) => {
   return value;
 }, z.boolean().optional());
 
+const imageInputSchema = z.object({
+  url: z.string().min(1),
+  path: z.string().optional(),
+  filename: z.string().optional(),
+  mimeType: z.string().optional(),
+  size: z.number().nonnegative().optional(),
+  provider: z.string().optional(),
+  publicId: z.string().optional(),
+  width: z.number().optional(),
+  height: z.number().optional(),
+});
+
 export const createItemSchema = z.object({
   title: z.string().trim().min(1),
   description: z.string().trim().min(1),
@@ -30,16 +42,7 @@ export const createItemSchema = z.object({
   cityId: z.string().min(1),
   address: z.string().trim().max(300).optional(),
   mode: z.enum(["GIFT", "EXCHANGE"]),
-  images: z
-    .array(
-      z.object({
-        url: z.string().min(1),
-        publicId: z.string().optional(),
-        width: z.number().optional(),
-        height: z.number().optional(),
-      })
-    )
-    .min(1),
+  images: z.array(imageInputSchema).min(1),
 });
 
 export const updateItemSchema = z
@@ -51,17 +54,7 @@ export const updateItemSchema = z
     cityId: z.string().min(1).optional(),
     address: z.string().trim().max(300).optional(),
     mode: z.enum(["GIFT", "EXCHANGE"]).optional(),
-    images: z
-      .array(
-        z.object({
-          url: z.string().min(1),
-          publicId: z.string().optional(),
-          width: z.number().optional(),
-          height: z.number().optional(),
-        })
-      )
-      .min(1)
-      .optional(),
+    images: z.array(imageInputSchema).min(1).optional(),
   })
   .superRefine((payload, ctx) => {
     const hasCountry = payload.countryId !== undefined;

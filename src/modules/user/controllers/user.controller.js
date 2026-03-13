@@ -1,6 +1,5 @@
 import { z } from "zod";
 import jwt from "jsonwebtoken";
-import cloudinary from "../../../config/cloudinary.js";
 import {
   REFRESH_COOKIE_NAME,
   getRefreshCookieOptions,
@@ -14,6 +13,7 @@ import {
   updateMe,
 } from "../services/user.service.js";
 import { badRequest, notFound } from "../../../utils/appError.js";
+import { deleteMediaAssets, diffMediaRefs } from "../../media/media.service.js";
 
 
 
@@ -29,6 +29,11 @@ const updateMeSchema = z.object({
   avatar: z
     .object({
       url: z.string().optional(),
+      path: z.string().optional(),
+      filename: z.string().optional(),
+      mimeType: z.string().optional(),
+      size: z.number().nonnegative().optional(),
+      provider: z.string().optional(),
       base64: z.string().optional(),
     })
     .optional(),
@@ -48,6 +53,22 @@ const changePasswordSchema = z.object({
 
 const leaderboardQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(100),
+});
+
+const avatarSchema = z.object({
+  url: z.string().min(1),
+  path: z.string().optional(),
+  filename: z.string().optional(),
+  mimeType: z.string().optional(),
+  size: z.number().nonnegative().optional(),
+  provider: z.string().optional(),
+  publicId: z.string().optional(),
+});
+
+const updateAvatarSchema = z.object({
+  avatar: avatarSchema.optional(),
+  avatarUrl: z.string().min(1).optional(),
+  publicId: z.string().optional(),
 });
 
 const resolveCurrentSessionId = (req) => {
@@ -168,65 +189,45 @@ export const me = async (req, res, next) => {
   }
 };
 
-
-
-export const getAvatarUploadSignature = async (req, res, next) => {
-  try {
-    const timestamp = Math.floor(Date.now() / 1000);
-
-    // keep uploads organized
-    const folder = `avatars/${req.user.id}`;
-
-    const paramsToSign = {
-      timestamp,
-      folder,
-      // optional: force transformations at upload time
-      // eager: "c_fill,w_512,h_512,q_auto,f_auto",
-    };
-
-    const signature = cloudinary.utils.api_sign_request(
-      paramsToSign,
-      process.env.CLOUDINARY_API_SECRET
-    );
-
-    res.json({
-      success: true,
-      timestamp,
-      signature,
-      folder,
-      cloudName: process.env.CLOUDINARY_CLOUD_NAME,
-      apiKey: process.env.CLOUDINARY_API_KEY,
-    });
-  } catch (e) {
-    next(e);
-  }
-};
-
-
 /**
  * PATCH /api/users/me/avatar
- * Body: { avatarUrl: string, publicId?: string }
+ * Body: { avatar?: ImageObject, avatarUrl?: string, publicId?: string }
  */
 export const updateMyAvatar = async (req, res, next) => {
   try {
-    const { avatarUrl, publicId } = req.body;
-
-    if (!avatarUrl) {
+    const payload = updateAvatarSchema.parse(req.body || {});
+    if (!payload.avatar?.url && !payload.avatarUrl) {
       throw badRequest("avatarUrl is required", "MISSING_AVATAR_URL");
     }
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      throw notFound("User not found", "USER_NOT_FOUND");
+    }
 
-    const user = await User.findByIdAndUpdate(
-      req.user.id,
-      {
-        avatar: {
-          url: avatarUrl,
-          publicId: publicId || "",
-        },
-      },
-      { new: true }
-    ).select("-password");
+    const previousAvatar = user.avatar ? [user.avatar.toObject?.() || user.avatar] : [];
+    const nextAvatar = payload.avatar
+      ? {
+          ...payload.avatar,
+          provider: payload.avatar.provider || "local",
+        }
+      : {
+          url: payload.avatarUrl || "",
+          publicId: payload.publicId || "",
+          provider: "local",
+        };
 
-    res.status(200).json({ success: true, user });
+    user.avatar = {
+      ...user.avatar?.toObject?.(),
+      ...nextAvatar,
+    };
+    await user.save();
+
+    const staleAvatar = diffMediaRefs(previousAvatar, [user.avatar]);
+    await deleteMediaAssets(staleAvatar);
+
+    const safeUser = await User.findById(req.user.id).select("-password");
+
+    res.status(200).json({ success: true, user: safeUser });
   } catch (e) {
     next(e);
   }
