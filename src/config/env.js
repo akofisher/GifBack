@@ -18,6 +18,7 @@ const envSchema = z.object({
   FCM_PROJECT_ID: z.string().trim().min(1).optional(),
   FCM_CLIENT_EMAIL: z.string().trim().min(1).optional(),
   FCM_PRIVATE_KEY: z.string().trim().min(1).optional(),
+  FCM_PRIVATE_KEY_BASE64: z.string().trim().min(1).optional(),
   MAX_ACTIVE_PUSH_TOKENS_PER_USER: z.coerce.number().int().positive().optional(),
 });
 

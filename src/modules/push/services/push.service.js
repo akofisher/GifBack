@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import admin from "firebase-admin";
 import logger from "../../../utils/logger.js";
 import { normalizeLanguage } from "../../../i18n/localization.js";
@@ -32,12 +33,50 @@ let messagingInitialized = false;
 
 const toObjectIdString = (value) => {
   if (!value) return "";
-  if (typeof value === "string") return value;
+  if (typeof value === "string") return value.trim();
+  if (Buffer.isBuffer(value)) return value.toString("hex");
+  if (value instanceof Uint8Array) return Buffer.from(value).toString("hex");
   if (typeof value === "object") {
-    if (value.id) return String(value.id);
-    if (value._id) return value._id.toString();
+    if (typeof value.toHexString === "function") return value.toHexString();
+    if (value._id) return toObjectIdString(value._id);
+    if (typeof value.id === "string") return value.id.trim();
+    if (Buffer.isBuffer(value.id)) return value.id.toString("hex");
+    if (value.id instanceof Uint8Array) return Buffer.from(value.id).toString("hex");
   }
-  return String(value);
+  return String(value).trim();
+};
+
+const normalizeObjectIdList = (values = []) => {
+  const valid = [];
+  const invalid = [];
+
+  for (const raw of values) {
+    const normalized = toObjectIdString(raw);
+    if (!normalized) continue;
+    if (!mongoose.isValidObjectId(normalized)) {
+      invalid.push(normalized);
+      continue;
+    }
+    valid.push(normalized);
+  }
+
+  return {
+    valid: Array.from(new Set(valid)),
+    invalid: Array.from(new Set(invalid)),
+  };
+};
+
+const resolveFirebasePrivateKey = () => {
+  const base64Value = String(process.env.FCM_PRIVATE_KEY_BASE64 || "").trim();
+  if (base64Value) {
+    try {
+      return Buffer.from(base64Value, "base64").toString("utf8").replace(/\\n/g, "\n");
+    } catch (error) {
+      logger.warn({ err: error }, "Failed to decode FCM_PRIVATE_KEY_BASE64");
+    }
+  }
+
+  return String(process.env.FCM_PRIVATE_KEY || "").replace(/\\n/g, "\n");
 };
 
 const toNotificationData = (data = {}) => {
@@ -76,7 +115,7 @@ const getMessagingClient = () => {
 
   const projectId = process.env.FCM_PROJECT_ID || "";
   const clientEmail = process.env.FCM_CLIENT_EMAIL || "";
-  const privateKey = (process.env.FCM_PRIVATE_KEY || "").replace(/\\n/g, "\n");
+  const privateKey = resolveFirebasePrivateKey();
   const envToggle = parseBoolean(process.env.FCM_ENABLED, null);
   const hasCredentials = Boolean(projectId && clientEmail && privateKey);
 
@@ -241,9 +280,19 @@ export const sendPushToUsers = async ({
   actorId = null,
   resolveLocalizedContent = null,
 }) => {
-  const normalizedUserIds = Array.from(
-    new Set(userIds.map(toObjectIdString).filter(Boolean))
-  );
+  const { valid: normalizedUserIds, invalid: invalidUserIds } =
+    normalizeObjectIdList(userIds);
+
+  if (invalidUserIds.length > 0) {
+    logger.warn(
+      {
+        type: data?.type || "GENERIC",
+        invalidUserIds: invalidUserIds.slice(0, 5),
+        invalidCount: invalidUserIds.length,
+      },
+      "Push skipped invalid recipient ids"
+    );
+  }
 
   if (!normalizedUserIds.length) {
     return { delivered: false, sent: 0, failed: 0, invalidated: 0 };
