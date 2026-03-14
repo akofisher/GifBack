@@ -269,8 +269,21 @@ export const formatRequestWithUsers = (request, options = {}) => {
     ? normalizeHistoryItemDetails(offeredItem)
     : null;
 
-  const ownerSeenAt = request.ownerSeenAt || null;
-  const requesterSeenAt = request.requesterSeenAt || null;
+  const hasOwnerSeenAt = Object.prototype.hasOwnProperty.call(
+    request,
+    "ownerSeenAt"
+  );
+  const hasRequesterSeenAt = Object.prototype.hasOwnProperty.call(
+    request,
+    "requesterSeenAt"
+  );
+  const legacySeenFallback = request.updatedAt || request.createdAt || null;
+  const ownerSeenAt = hasOwnerSeenAt
+    ? request.ownerSeenAt || null
+    : legacySeenFallback;
+  const requesterSeenAt = hasRequesterSeenAt
+    ? request.requesterSeenAt || null
+    : legacySeenFallback;
   const ownerId = owner?._id?.toString?.() || toObjectIdString(request.ownerId);
   const requesterId =
     requester?._id?.toString?.() || toObjectIdString(request.requesterId);

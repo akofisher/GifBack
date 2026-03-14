@@ -167,6 +167,14 @@ const markRequestSeenForViewer = ({
   return false;
 };
 
+const buildUnreadRequestFilter = (participantField, seenField, userId) => ({
+  [participantField]: userId,
+  $and: [
+    { [seenField]: null },
+    { [seenField]: { $exists: true } },
+  ],
+});
+
 const getActiveListingLimit = (mode) =>
   mode === "GIFT" ? MAX_ACTIVE_GIFT_ITEMS : MAX_ACTIVE_EXCHANGE_ITEMS;
 
@@ -2078,9 +2086,15 @@ export const getMyNotificationsSummary = async (userId) => {
     chats,
   ] = await Promise.all([
     ItemRequest.countDocuments(incomingBaseFilter),
-    ItemRequest.countDocuments({ ...incomingBaseFilter, ownerSeenAt: null }),
+    ItemRequest.countDocuments({
+      ...incomingBaseFilter,
+      ...buildUnreadRequestFilter("ownerId", "ownerSeenAt", userId),
+    }),
     ItemRequest.countDocuments(mineBaseFilter),
-    ItemRequest.countDocuments({ ...mineBaseFilter, requesterSeenAt: null }),
+    ItemRequest.countDocuments({
+      ...mineBaseFilter,
+      ...buildUnreadRequestFilter("requesterId", "requesterSeenAt", userId),
+    }),
     getChatUnreadSummary(userId),
   ]);
 

@@ -109,7 +109,9 @@ const formatChat = (chat, viewerId = null) => {
     requestId: chat.requestId?.toString?.() || chat.requestId,
     participants: participantIds,
     participantDetails,
+    unreadCount: viewerUnreadCount,
     viewerUnreadCount,
+    hasUnread: viewerUnreadCount === null ? null : viewerUnreadCount > 0,
     viewerHasUnread:
       viewerUnreadCount === null ? null : viewerUnreadCount > 0,
   };

@@ -202,6 +202,41 @@ test("formatRequestWithUsers resolves viewer unread flags", () => {
   assert.equal(requesterView.viewerUnread, true);
 });
 
+test("formatRequestWithUsers treats legacy missing seen fields as already seen", () => {
+  const ownerId = new mongoose.Types.ObjectId();
+  const requesterId = new mongoose.Types.ObjectId();
+  const updatedAt = new Date("2026-03-14T15:00:00.000Z");
+
+  const ownerView = formatRequestWithUsers(
+    {
+      _id: new mongoose.Types.ObjectId(),
+      ownerId,
+      requesterId,
+      itemId: new mongoose.Types.ObjectId(),
+      createdAt: new Date("2026-03-10T10:00:00.000Z"),
+      updatedAt,
+    },
+    { viewerId: ownerId }
+  );
+
+  const requesterView = formatRequestWithUsers(
+    {
+      _id: new mongoose.Types.ObjectId(),
+      ownerId,
+      requesterId,
+      itemId: new mongoose.Types.ObjectId(),
+      createdAt: new Date("2026-03-10T10:00:00.000Z"),
+      updatedAt,
+    },
+    { viewerId: requesterId }
+  );
+
+  assert.equal(ownerView.viewerSeen, true);
+  assert.equal(ownerView.viewerUnread, false);
+  assert.equal(requesterView.viewerSeen, true);
+  assert.equal(requesterView.viewerUnread, false);
+});
+
 test("applyAutoCanceledVisibilityFilter hides auto-canceled by default", () => {
   const filtered = applyAutoCanceledVisibilityFilter(
     { requesterId: new mongoose.Types.ObjectId() },
