@@ -8,7 +8,11 @@ import Item from "../models/item.model.js";
 import Notification from "../models/notification.model.js";
 import ItemRequest from "../models/request.model.js";
 import ItemTransaction from "../models/transaction.model.js";
-import { deleteChatByRequestId, deleteChatsByRequestIds } from "../../chat/services/chat.service.js";
+import {
+  deleteChatByRequestId,
+  deleteChatsByRequestIds,
+  getChatUnreadSummary,
+} from "../../chat/services/chat.service.js";
 import {
   ensureWeeklyGiftLimit,
 } from "./gift-limit.service.js";
@@ -72,6 +76,61 @@ const cleanupMediaAssetsSafely = async (mediaRefs, context = {}) => {
 const shouldHideAutoCanceledConflict = (options = {}) =>
   options.includeAutoCanceled !== true;
 
+const applySeenStateForActor = ({
+  request,
+  actorId = null,
+  now = new Date(),
+}) => {
+  const actorKey = actorId ? actorId.toString() : "";
+  const ownerKey = request.ownerId?.toString?.() || "";
+  const requesterKey = request.requesterId?.toString?.() || "";
+
+  if (actorKey && actorKey === ownerKey) {
+    request.ownerSeenAt = now;
+    request.requesterSeenAt = null;
+    return;
+  }
+
+  if (actorKey && actorKey === requesterKey) {
+    request.requesterSeenAt = now;
+    request.ownerSeenAt = null;
+    return;
+  }
+
+  // System/unknown actor updates should be unread for both participants.
+  request.ownerSeenAt = null;
+  request.requesterSeenAt = null;
+};
+
+const buildSeenStatePatchForActor = ({
+  request,
+  actorId = null,
+  now = new Date(),
+}) => {
+  const actorKey = actorId ? actorId.toString() : "";
+  const ownerKey = request.ownerId?.toString?.() || "";
+  const requesterKey = request.requesterId?.toString?.() || "";
+
+  if (actorKey && actorKey === ownerKey) {
+    return {
+      ownerSeenAt: now,
+      requesterSeenAt: null,
+    };
+  }
+
+  if (actorKey && actorKey === requesterKey) {
+    return {
+      ownerSeenAt: null,
+      requesterSeenAt: now,
+    };
+  }
+
+  return {
+    ownerSeenAt: null,
+    requesterSeenAt: null,
+  };
+};
+
 export const applyAutoCanceledVisibilityFilter = (filter, options = {}) => {
   if (!shouldHideAutoCanceledConflict(options)) {
     return filter;
@@ -83,6 +142,29 @@ export const applyAutoCanceledVisibilityFilter = (filter, options = {}) => {
       $ne: REQUEST_CANCELLATION_REASONS.AUTO_CANCELED_CONFLICT,
     },
   };
+};
+
+const markRequestSeenForViewer = ({
+  request,
+  viewerId,
+  now = new Date(),
+}) => {
+  const viewerKey = viewerId?.toString?.() || String(viewerId || "");
+  const ownerKey = request.ownerId?.toString?.() || "";
+  const requesterKey = request.requesterId?.toString?.() || "";
+
+  if (!viewerKey) return false;
+
+  if (viewerKey === ownerKey) {
+    request.ownerSeenAt = now;
+    return true;
+  }
+  if (viewerKey === requesterKey) {
+    request.requesterSeenAt = now;
+    return true;
+  }
+
+  return false;
 };
 
 const getActiveListingLimit = (mode) =>
@@ -346,23 +428,28 @@ const autoCancelCompetingPendingRequests = async ({
 
   if (!competingRequests.length) {
     await syncPendingRequestCountsForItems(normalizedReservedIds, session);
-    return { canceledCount: 0 };
+    return { canceledCount: 0, canceledRequestIds: [] };
   }
 
   const now = new Date();
   const competingIds = competingRequests.map((request) => request._id);
 
-  await ItemRequest.updateMany(
-    { _id: { $in: competingIds } },
-    {
-      $set: {
-        status: "CANCELED",
-        respondedAt: now,
-        expiresAt: null,
-        chatId: null,
-        cancellationReason: REQUEST_CANCELLATION_REASONS.AUTO_CANCELED_CONFLICT,
+  await ItemRequest.bulkWrite(
+    competingRequests.map((request) => ({
+      updateOne: {
+        filter: { _id: request._id },
+        update: {
+          $set: {
+            status: "CANCELED",
+            respondedAt: now,
+            expiresAt: null,
+            chatId: null,
+            cancellationReason: REQUEST_CANCELLATION_REASONS.AUTO_CANCELED_CONFLICT,
+            ...buildSeenStatePatchForActor({ request, actorId, now }),
+          },
+        },
       },
-    },
+    })),
     { session }
   );
 
@@ -415,7 +502,10 @@ const autoCancelCompetingPendingRequests = async ({
     session
   );
 
-  return { canceledCount: competingRequests.length };
+  return {
+    canceledCount: competingRequests.length,
+    canceledRequestIds: competingIds,
+  };
 };
 
 const itemStatusError = (item) => {
@@ -681,18 +771,23 @@ export const deleteItem = async (ownerId, itemId) => {
       .session(session);
 
     if (pendingRequests.length) {
-      await ItemRequest.updateMany(
-        { _id: { $in: pendingRequests.map((r) => r._id) } },
-        {
-          $set: {
-            status: "CANCELED",
-            respondedAt: now,
-            cancellationReason: null,
-            itemSnapshot: snapshot,
-            expiresAt: null,
-            chatId: null,
+      await ItemRequest.bulkWrite(
+        pendingRequests.map((request) => ({
+          updateOne: {
+            filter: { _id: request._id },
+            update: {
+              $set: {
+                status: "CANCELED",
+                respondedAt: now,
+                cancellationReason: null,
+                itemSnapshot: snapshot,
+                expiresAt: null,
+                chatId: null,
+                ...buildSeenStatePatchForActor({ request, actorId: ownerId, now }),
+              },
+            },
           },
-        },
+        })),
         { session }
       );
 
@@ -730,18 +825,23 @@ export const deleteItem = async (ownerId, itemId) => {
       .session(session);
 
     if (approvedRequests.length) {
-      await ItemRequest.updateMany(
-        { _id: { $in: approvedRequests.map((r) => r._id) } },
-        {
-          $set: {
-            status: "EXPIRED",
-            respondedAt: now,
-            cancellationReason: null,
-            itemSnapshot: snapshot,
-            expiresAt: null,
-            chatId: null,
+      await ItemRequest.bulkWrite(
+        approvedRequests.map((request) => ({
+          updateOne: {
+            filter: { _id: request._id },
+            update: {
+              $set: {
+                status: "EXPIRED",
+                respondedAt: now,
+                cancellationReason: null,
+                itemSnapshot: snapshot,
+                expiresAt: null,
+                chatId: null,
+                ...buildSeenStatePatchForActor({ request, actorId: ownerId, now }),
+              },
+            },
           },
-        },
+        })),
         { session }
       );
 
@@ -794,18 +894,23 @@ export const deleteItem = async (ownerId, itemId) => {
       .session(session);
 
     if (pendingOfferedRequests.length) {
-      await ItemRequest.updateMany(
-        { _id: { $in: pendingOfferedRequests.map((r) => r._id) } },
-        {
-          $set: {
-            status: "CANCELED",
-            respondedAt: now,
-            cancellationReason: null,
-            offeredItemSnapshot: snapshot,
-            expiresAt: null,
-            chatId: null,
+      await ItemRequest.bulkWrite(
+        pendingOfferedRequests.map((request) => ({
+          updateOne: {
+            filter: { _id: request._id },
+            update: {
+              $set: {
+                status: "CANCELED",
+                respondedAt: now,
+                cancellationReason: null,
+                offeredItemSnapshot: snapshot,
+                expiresAt: null,
+                chatId: null,
+                ...buildSeenStatePatchForActor({ request, actorId: ownerId, now }),
+              },
+            },
           },
-        },
+        })),
         { session }
       );
 
@@ -869,18 +974,23 @@ export const deleteItem = async (ownerId, itemId) => {
       .session(session);
 
     if (approvedOfferedRequests.length) {
-      await ItemRequest.updateMany(
-        { _id: { $in: approvedOfferedRequests.map((r) => r._id) } },
-        {
-          $set: {
-            status: "EXPIRED",
-            respondedAt: now,
-            cancellationReason: null,
-            offeredItemSnapshot: snapshot,
-            expiresAt: null,
-            chatId: null,
+      await ItemRequest.bulkWrite(
+        approvedOfferedRequests.map((request) => ({
+          updateOne: {
+            filter: { _id: request._id },
+            update: {
+              $set: {
+                status: "EXPIRED",
+                respondedAt: now,
+                cancellationReason: null,
+                offeredItemSnapshot: snapshot,
+                expiresAt: null,
+                chatId: null,
+                ...buildSeenStatePatchForActor({ request, actorId: ownerId, now }),
+              },
+            },
           },
-        },
+        })),
         { session }
       );
 
@@ -1041,6 +1151,8 @@ export const createRequest = async (requesterId, itemId, payload) => {
             offeredItemSnapshot: offeredItem
               ? getItemSnapshot(offeredItem)
               : { title: "", imageUrl: "" },
+            ownerSeenAt: null,
+            requesterSeenAt: new Date(),
           },
         ],
         { session }
@@ -1092,7 +1204,7 @@ export const createRequest = async (requesterId, itemId, payload) => {
     session.endSession();
   }
 
-  return getRequestWithNames(createdRequestId);
+  return getRequestWithNames(createdRequestId, requesterId);
 };
 
 export const getMyRequests = async (requesterId, options = {}) => {
@@ -1100,7 +1212,7 @@ export const getMyRequests = async (requesterId, options = {}) => {
   if (options.status) filter.status = options.status;
   if (options.type) filter.type = options.type;
   filter = applyAutoCanceledVisibilityFilter(filter, options);
-  return getRequestsWithNames(filter, options);
+  return getRequestsWithNames(filter, options, requesterId);
 };
 
 export const getIncomingRequests = async (ownerId, options = {}) => {
@@ -1108,12 +1220,13 @@ export const getIncomingRequests = async (ownerId, options = {}) => {
   if (options.status) filter.status = options.status;
   if (options.type) filter.type = options.type;
   filter = applyAutoCanceledVisibilityFilter(filter, options);
-  return getRequestsWithNames(filter, options);
+  return getRequestsWithNames(filter, options, ownerId);
 };
 
 export const respondToRequest = async (ownerId, requestId, action) => {
   const session = await mongoose.startSession();
   let updatedRequestId;
+  let autoCanceledRequestIds = [];
 
   await session.withTransaction(async () => {
     const request = await ItemRequest.findById(requestId).session(session);
@@ -1128,10 +1241,12 @@ export const respondToRequest = async (ownerId, requestId, action) => {
     }
 
     if (action === "reject") {
+      const now = new Date();
       request.status = "REJECTED";
-      request.respondedAt = new Date();
+      request.respondedAt = now;
       request.expiresAt = null;
       request.cancellationReason = null;
+      applySeenStateForActor({ request, actorId: ownerId, now });
       await request.save({ session });
 
       const item = await Item.findById(request.itemId).session(session);
@@ -1232,6 +1347,7 @@ export const respondToRequest = async (ownerId, requestId, action) => {
       request.expiresAt = expiresAt;
     }
     request.respondedAt = now;
+    applySeenStateForActor({ request, actorId: ownerId, now });
     await request.save({ session });
 
     itemA.status = "RESERVED";
@@ -1246,12 +1362,13 @@ export const respondToRequest = async (ownerId, requestId, action) => {
       await itemB.save({ session });
     }
 
-    await autoCancelCompetingPendingRequests({
+    const autoCanceled = await autoCancelCompetingPendingRequests({
       approvedRequestId: request._id,
       reservedItemIds: [itemA._id, itemB?._id].filter(Boolean),
       actorId: ownerId,
       session,
     });
+    autoCanceledRequestIds = autoCanceled.canceledRequestIds || [];
 
     if (request.type === "GIFT") {
       await User.updateOne(
@@ -1325,7 +1442,20 @@ export const respondToRequest = async (ownerId, requestId, action) => {
   });
 
   session.endSession();
-  return getRequestWithNames(updatedRequestId);
+
+  const request = await getRequestWithNames(updatedRequestId, ownerId);
+  const autoCanceledRequests = autoCanceledRequestIds.length
+    ? (
+        await Promise.all(
+          autoCanceledRequestIds.map((id) => getRequestWithNames(id))
+        )
+      ).filter(Boolean)
+    : [];
+
+  return {
+    request,
+    autoCanceledRequests,
+  };
 };
 
 const expireApprovedRequestAndRestoreItems = async ({
@@ -1339,8 +1469,10 @@ const expireApprovedRequestAndRestoreItems = async ({
 }) => {
   request.status = "EXPIRED";
   request.respondedAt = now;
+  request.expiresAt = null;
   request.cancellationReason = null;
   request.chatId = null;
+  applySeenStateForActor({ request, actorId, now });
   await request.save({ session });
 
   if (itemA && itemA.reservedByRequestId?.toString() === request._id.toString()) {
@@ -1468,6 +1600,7 @@ export const confirmRequest = async (userId, requestId) => {
 
     const bothConfirmed = request.ownerConfirmedAt && request.requesterConfirmedAt;
     if (!bothConfirmed) {
+      applySeenStateForActor({ request, actorId: userId, now });
       await request.save({ session });
       updatedRequestId = request._id;
       return;
@@ -1514,6 +1647,7 @@ export const confirmRequest = async (userId, requestId) => {
     request.expiresAt = null;
     request.cancellationReason = null;
     request.chatId = null;
+    applySeenStateForActor({ request, actorId: userId, now });
     await request.save({ session });
 
     await deleteChatByRequestId(request._id, session);
@@ -1640,7 +1774,7 @@ export const confirmRequest = async (userId, requestId) => {
   if (expired) {
     throw conflict("Request expired", "REQUEST_EXPIRED");
   }
-  return getRequestWithNames(updatedRequestId);
+  return getRequestWithNames(updatedRequestId, userId);
 };
 
 export const cancelRequest = async (requesterId, requestId) => {
@@ -1660,10 +1794,12 @@ export const cancelRequest = async (requesterId, requestId) => {
     }
 
     request.status = "CANCELED";
-    request.respondedAt = new Date();
+    const now = new Date();
+    request.respondedAt = now;
     request.expiresAt = null;
     request.cancellationReason = null;
     request.chatId = null;
+    applySeenStateForActor({ request, actorId: requesterId, now });
     await request.save({ session });
 
     const item = await Item.findById(request.itemId).session(session);
@@ -1691,7 +1827,7 @@ export const cancelRequest = async (requesterId, requestId) => {
   });
 
   session.endSession();
-  return getRequestWithNames(updatedRequestId);
+  return getRequestWithNames(updatedRequestId, requesterId);
 };
 
 export const deleteRequest = async (requesterId, requestId) => {
@@ -1708,10 +1844,12 @@ export const deleteRequest = async (requesterId, requestId) => {
 
     if (request.status === "PENDING") {
       request.status = "CANCELED";
-      request.respondedAt = new Date();
+      const now = new Date();
+      request.respondedAt = now;
       request.expiresAt = null;
       request.cancellationReason = null;
       request.chatId = null;
+      applySeenStateForActor({ request, actorId: requesterId, now });
       await request.save({ session });
 
       const item = await Item.findById(request.itemId).session(session);
@@ -1788,6 +1926,7 @@ export const deleteRequest = async (requesterId, requestId) => {
     request.expiresAt = null;
     request.cancellationReason = null;
     request.chatId = null;
+    applySeenStateForActor({ request, actorId: requesterId, now });
     await request.save({ session });
 
     await deleteChatByRequestId(request._id, session);
@@ -1867,7 +2006,7 @@ export const deleteRequest = async (requesterId, requestId) => {
   });
 
   session.endSession();
-  return getRequestWithNames(updatedRequestId);
+  return getRequestWithNames(updatedRequestId, requesterId);
 };
 
 export const hardDeleteRequest = async (userId, requestId) => {
@@ -1913,7 +2052,7 @@ export const hardDeleteRequest = async (userId, requestId) => {
 };
 
 export const getRequestDetails = async (userId, requestId) => {
-  const request = await getRequestWithNames(requestId);
+  const request = await getRequestWithNames(requestId, userId);
   if (!request) {
     throw notFound("Request not found", "REQUEST_NOT_FOUND");
   }
@@ -1925,6 +2064,95 @@ export const getRequestDetails = async (userId, requestId) => {
   }
 
   return request;
+};
+
+export const getMyNotificationsSummary = async (userId) => {
+  const incomingBaseFilter = applyAutoCanceledVisibilityFilter({ ownerId: userId });
+  const mineBaseFilter = applyAutoCanceledVisibilityFilter({ requesterId: userId });
+
+  const [
+    incomingTotal,
+    incomingUnread,
+    mineTotal,
+    mineUnread,
+    chats,
+  ] = await Promise.all([
+    ItemRequest.countDocuments(incomingBaseFilter),
+    ItemRequest.countDocuments({ ...incomingBaseFilter, ownerSeenAt: null }),
+    ItemRequest.countDocuments(mineBaseFilter),
+    ItemRequest.countDocuments({ ...mineBaseFilter, requesterSeenAt: null }),
+    getChatUnreadSummary(userId),
+  ]);
+
+  return {
+    requests: {
+      incomingUnread,
+      mineUnread,
+      incomingTotal,
+      mineTotal,
+    },
+    chats,
+  };
+};
+
+export const markRequestNotificationsRead = async (
+  userId,
+  { scope = "all", requestId = null } = {}
+) => {
+  const now = new Date();
+  const normalizedScope = String(scope || "all").toLowerCase();
+  const markIncoming = normalizedScope === "all" || normalizedScope === "incoming";
+  const markMine = normalizedScope === "all" || normalizedScope === "mine";
+
+  if (requestId) {
+    const request = await ItemRequest.findById(requestId);
+    if (!request) throw notFound("Request not found", "REQUEST_NOT_FOUND");
+
+    const ownerKey = request.ownerId?.toString?.() || "";
+    const requesterKey = request.requesterId?.toString?.() || "";
+    const viewerKey = userId?.toString?.() || "";
+    if (ownerKey !== viewerKey && requesterKey !== viewerKey) {
+      throw forbidden("Not allowed", "REQUEST_NOT_PARTICIPANT");
+    }
+
+    let changed = false;
+    if (markIncoming && ownerKey === viewerKey) {
+      changed = markRequestSeenForViewer({ request, viewerId: userId, now }) || changed;
+    }
+    if (markMine && requesterKey === viewerKey) {
+      changed = markRequestSeenForViewer({ request, viewerId: userId, now }) || changed;
+    }
+
+    if (changed) {
+      await request.save();
+    }
+
+    return { success: true };
+  }
+
+  const updates = [];
+  if (markIncoming) {
+    updates.push(
+      ItemRequest.updateMany(
+        { ownerId: userId, ownerSeenAt: null },
+        { $set: { ownerSeenAt: now } }
+      )
+    );
+  }
+  if (markMine) {
+    updates.push(
+      ItemRequest.updateMany(
+        { requesterId: userId, requesterSeenAt: null },
+        { $set: { requesterSeenAt: now } }
+      )
+    );
+  }
+
+  if (updates.length > 0) {
+    await Promise.all(updates);
+  }
+
+  return { success: true };
 };
 
 const getHistoryFromCompletedRequests = async (userId, role = "all", options = {}) => {

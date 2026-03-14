@@ -2,14 +2,18 @@ import ItemRequest from "../models/request.model.js";
 import { formatRequestWithUsers, requestPopulate } from "./marketplace.presenters.js";
 import { buildPagination, buildRequestSort, parsePagination } from "./marketplace.query.js";
 
-export const getRequestWithNames = async (requestId) => {
+export const getRequestWithNames = async (requestId, viewerId = null) => {
   const request = await ItemRequest.findById(requestId)
     .populate(requestPopulate)
     .lean();
-  return formatRequestWithUsers(request);
+  return formatRequestWithUsers(request, { viewerId });
 };
 
-export const getRequestsWithNames = async (filter, options = {}) => {
+export const getRequestsWithNames = async (
+  filter,
+  options = {},
+  viewerId = null
+) => {
   const pagination = parsePagination(options);
   const sort = buildRequestSort(options.sort);
 
@@ -27,7 +31,9 @@ export const getRequestsWithNames = async (filter, options = {}) => {
   ]);
 
   return {
-    requests: requests.map(formatRequestWithUsers),
+    requests: requests.map((request) =>
+      formatRequestWithUsers(request, { viewerId })
+    ),
     pagination: buildPagination({
       page: pagination.page,
       limit: pagination.limit,

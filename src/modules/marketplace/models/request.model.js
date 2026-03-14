@@ -41,6 +41,8 @@ const itemRequestSchema = new mongoose.Schema(
 
     ownerConfirmedAt: { type: Date, default: null },
     requesterConfirmedAt: { type: Date, default: null },
+    ownerSeenAt: { type: Date, default: null },
+    requesterSeenAt: { type: Date, default: null },
     completedAt: { type: Date, default: null },
     respondedAt: { type: Date, default: null },
   },
@@ -60,5 +62,7 @@ itemRequestSchema.index(
 );
 itemRequestSchema.index({ ownerId: 1, status: 1, createdAt: -1 });
 itemRequestSchema.index({ requesterId: 1, status: 1, createdAt: -1 });
+itemRequestSchema.index({ ownerId: 1, ownerSeenAt: 1, createdAt: -1 });
+itemRequestSchema.index({ requesterId: 1, requesterSeenAt: 1, createdAt: -1 });
 
 export default mongoose.model("ItemRequest", itemRequestSchema);

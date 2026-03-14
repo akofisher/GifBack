@@ -168,6 +168,40 @@ test("formatRequestWithUsers propagates cancellationReason", () => {
   assert.equal(formatted.cancellationReason, "AUTO_CANCELED_CONFLICT");
 });
 
+test("formatRequestWithUsers resolves viewer unread flags", () => {
+  const ownerId = new mongoose.Types.ObjectId();
+  const requesterId = new mongoose.Types.ObjectId();
+  const now = new Date("2026-03-14T12:00:00.000Z");
+
+  const ownerView = formatRequestWithUsers(
+    {
+      _id: new mongoose.Types.ObjectId(),
+      ownerId,
+      requesterId,
+      ownerSeenAt: now,
+      requesterSeenAt: null,
+      itemId: new mongoose.Types.ObjectId(),
+    },
+    { viewerId: ownerId }
+  );
+  assert.equal(ownerView.viewerSeen, true);
+  assert.equal(ownerView.viewerUnread, false);
+
+  const requesterView = formatRequestWithUsers(
+    {
+      _id: new mongoose.Types.ObjectId(),
+      ownerId,
+      requesterId,
+      ownerSeenAt: now,
+      requesterSeenAt: null,
+      itemId: new mongoose.Types.ObjectId(),
+    },
+    { viewerId: requesterId }
+  );
+  assert.equal(requesterView.viewerSeen, false);
+  assert.equal(requesterView.viewerUnread, true);
+});
+
 test("applyAutoCanceledVisibilityFilter hides auto-canceled by default", () => {
   const filtered = applyAutoCanceledVisibilityFilter(
     { requesterId: new mongoose.Types.ObjectId() },

@@ -17,6 +17,8 @@ import {
   listItemsHandler,
   listMyItemsHandler,
   listMyRequestsHandler,
+  markRequestNotificationsReadHandler,
+  notificationsSummaryHandler,
   respondRequestHandler,
   updateItemHandler,
 } from "../controllers/marketplace.controller.js";
@@ -36,6 +38,12 @@ router.delete("/items/:id", requireAuth, deleteItemHandler);
 router.post("/items/:itemId/requests", requireAuth, createRequestHandler);
 router.get("/me/requests", requireAuth, listMyRequestsHandler);
 router.get("/me/incoming-requests", requireAuth, listIncomingRequestsHandler);
+router.get("/me/notifications/summary", requireAuth, notificationsSummaryHandler);
+router.patch(
+  "/me/notifications/requests/read",
+  requireAuth,
+  markRequestNotificationsReadHandler
+);
 router.get("/requests/:id", requireAuth, getRequestHandler);
 router.patch("/requests/:id/respond", requireAuth, respondRequestHandler);
 router.patch("/requests/:id/confirm", requireAuth, confirmRequestHandler);

@@ -78,6 +78,11 @@ export const respondSchema = z.object({
   action: z.enum(["approve", "reject"]),
 });
 
+export const markRequestsReadSchema = z.object({
+  scope: z.enum(["incoming", "mine", "all"]).default("all"),
+  requestId: z.string().trim().min(1).optional(),
+});
+
 export const listItemsQuerySchema = z.object({
   ...paginationQuerySchema,
   mode: upperEnum(["GIFT", "EXCHANGE"]).optional(),

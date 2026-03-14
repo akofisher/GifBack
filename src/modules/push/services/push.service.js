@@ -524,9 +524,17 @@ const REQUEST_PUSH_COPY = {
       title: "Request canceled",
       body: `"${itemTitle}" request was canceled`,
     }),
+    REQUEST_CONFIRMATION_PENDING: ({ itemTitle }) => ({
+      title: "Confirmation needed",
+      body: `Please confirm completion for "${itemTitle}"`,
+    }),
     REQUEST_EXPIRED: ({ itemTitle }) => ({
       title: "Request expired",
       body: `"${itemTitle}" request has expired`,
+    }),
+    REQUEST_AUTO_CANCELED_CONFLICT: ({ itemTitle }) => ({
+      title: "Request canceled",
+      body: `"${itemTitle}" request was auto-canceled due to item conflict`,
     }),
   },
   ka: {
@@ -550,9 +558,17 @@ const REQUEST_PUSH_COPY = {
       title: "მოთხოვნა გაუქმდა",
       body: `"${itemTitle}" მოთხოვნა გაუქმდა`,
     }),
+    REQUEST_CONFIRMATION_PENDING: ({ itemTitle }) => ({
+      title: "დადასტურება საჭიროა",
+      body: `გთხოვთ დაადასტუროთ "${itemTitle}" მოთხოვნის დასრულება`,
+    }),
     REQUEST_EXPIRED: ({ itemTitle }) => ({
       title: "მოთხოვნას ვადა გაუვიდა",
       body: `"${itemTitle}" მოთხოვნას ვადა გაუვიდა`,
+    }),
+    REQUEST_AUTO_CANCELED_CONFLICT: ({ itemTitle }) => ({
+      title: "მოთხოვნა გაუქმდა",
+      body: `"${itemTitle}" მოთხოვნა ავტომატურად გაუქმდა კონფლიქტის გამო`,
     }),
   },
 };
@@ -569,15 +585,21 @@ export const sendRequestLifecyclePushSafe = async ({
   const actorKey = toObjectIdString(actorId);
   const recipientsByEvent = {
     REQUEST_CREATED: [ownerId],
-    REQUEST_APPROVED: [requesterId],
+    REQUEST_APPROVED: [ownerId, requesterId],
     REQUEST_REJECTED: [requesterId],
+    REQUEST_CONFIRMATION_PENDING: [ownerId, requesterId],
     REQUEST_COMPLETED: [ownerId, requesterId],
     REQUEST_CANCELED: [ownerId, requesterId],
     REQUEST_EXPIRED: [ownerId, requesterId],
+    REQUEST_AUTO_CANCELED_CONFLICT: [ownerId, requesterId],
   };
+
+  const includeActorEvents = new Set(["REQUEST_COMPLETED"]);
   const userIds = Array.from(
     new Set((recipientsByEvent[event] || [ownerId, requesterId]).filter(Boolean))
-  ).filter((userId) => !actorKey || userId !== actorKey);
+  ).filter((userId) =>
+    includeActorEvents.has(event) ? true : !actorKey || userId !== actorKey
+  );
   if (!userIds.length) return;
 
   const itemTitle =

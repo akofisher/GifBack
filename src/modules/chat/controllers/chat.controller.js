@@ -2,6 +2,7 @@ import {
   createChatForRequest,
   listChats,
   listMessages,
+  markChatRead,
   sendMessage,
 } from "../services/chat.service.js";
 import { sendChatMessagePushSafe } from "../../push/services/push.service.js";
@@ -59,6 +60,19 @@ export const sendMessageHandler = async (req, res, next) => {
       text: message.text,
     });
     res.status(201).json({ success: true, message });
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const markChatReadHandler = async (req, res, next) => {
+  try {
+    const result = await markChatRead(req.user.id, req.params.id);
+    res.status(200).json({
+      success: true,
+      message: "Chat marked as read",
+      data: result,
+    });
   } catch (err) {
     next(err);
   }

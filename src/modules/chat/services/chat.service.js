@@ -48,7 +48,34 @@ const buildPagination = ({ page, limit, total, hasPagination }) => {
 const buildName = (firstName, lastName) =>
   [firstName, lastName].filter(Boolean).join(" ").trim();
 
-const formatChat = (chat) => {
+const toIdString = (value) =>
+  value?.toString?.() || (value ? String(value) : "");
+
+const toUserReadStateMap = (chat) => {
+  const map = new Map();
+  const entries = Array.isArray(chat?.readState) ? chat.readState : [];
+
+  for (const entry of entries) {
+    const key = toIdString(entry?.userId);
+    if (!key) continue;
+    map.set(key, {
+      unreadCount: Math.max(0, Number(entry?.unreadCount || 0)),
+      lastReadAt: entry?.lastReadAt || null,
+    });
+  }
+
+  return map;
+};
+
+const getViewerUnreadCount = (chat, viewerId) => {
+  if (!viewerId) return null;
+  const key = toIdString(viewerId);
+  if (!key) return null;
+  const state = toUserReadStateMap(chat).get(key);
+  return Math.max(0, Number(state?.unreadCount || 0));
+};
+
+const formatChat = (chat, viewerId = null) => {
   const participantDetails = Array.isArray(chat.participants)
     ? chat.participants.map((entry) => {
         if (entry && typeof entry === "object" && entry._id) {
@@ -74,6 +101,7 @@ const formatChat = (chat) => {
     : [];
 
   const participantIds = participantDetails.map((entry) => entry.id);
+  const viewerUnreadCount = getViewerUnreadCount(chat, viewerId);
 
   return {
     ...chat,
@@ -81,6 +109,9 @@ const formatChat = (chat) => {
     requestId: chat.requestId?.toString?.() || chat.requestId,
     participants: participantIds,
     participantDetails,
+    viewerUnreadCount,
+    viewerHasUnread:
+      viewerUnreadCount === null ? null : viewerUnreadCount > 0,
   };
 };
 
@@ -90,6 +121,35 @@ const formatMessage = (message) => ({
   chatId: message.chatId?.toString?.() || message.chatId,
   senderId: message.senderId?.toString?.() || message.senderId,
 });
+
+export const getChatUnreadSummary = async (userId) => {
+  const rows = await Chat.find({
+    participants: userId,
+    status: "OPEN",
+  })
+    .select("_id readState")
+    .lean();
+
+  const unreadByChatId = {};
+  let unread = 0;
+
+  for (const row of rows) {
+    const chatId = row?._id?.toString?.();
+    if (!chatId) continue;
+
+    const chatUnread = getViewerUnreadCount(row, userId) || 0;
+    if (chatUnread > 0) {
+      unreadByChatId[chatId] = chatUnread;
+    }
+    unread += chatUnread;
+  }
+
+  return {
+    unread,
+    total: rows.length,
+    unreadByChatId,
+  };
+};
 
 export const createChatForRequest = async (userId, requestId) => {
   const session = await mongoose.startSession();
@@ -120,6 +180,18 @@ export const createChatForRequest = async (userId, requestId) => {
           requestId: request._id,
           participants: [request.ownerId, request.requesterId],
           status: "OPEN",
+          readState: [
+            {
+              userId: request.ownerId,
+              unreadCount: 0,
+              lastReadAt: new Date(),
+            },
+            {
+              userId: request.requesterId,
+              unreadCount: 0,
+              lastReadAt: new Date(),
+            },
+          ],
         },
       ],
       { session }
@@ -151,7 +223,7 @@ export const listChats = async (userId, options = {}) => {
   ]);
 
   return {
-    chats: rows.map(formatChat),
+    chats: rows.map((chat) => formatChat(chat, userId)),
     pagination: buildPagination({
       page: pagination.page,
       limit: pagination.limit,
@@ -259,7 +331,34 @@ export const sendMessage = async (userId, chatId, text) => {
       { session }
     );
 
-    chat.lastMessageAt = new Date();
+    const now = new Date();
+    const senderKey = userId.toString();
+    const participantIds = chat.participants.map((id) => id.toString());
+    const readStateByUser = toUserReadStateMap(chat);
+
+    for (const participantId of participantIds) {
+      const currentState = readStateByUser.get(participantId) || {
+        unreadCount: 0,
+        lastReadAt: null,
+      };
+
+      if (participantId === senderKey) {
+        currentState.unreadCount = 0;
+        currentState.lastReadAt = now;
+      } else {
+        currentState.unreadCount = Math.max(0, Number(currentState.unreadCount || 0)) + 1;
+      }
+
+      readStateByUser.set(participantId, currentState);
+    }
+
+    chat.readState = Array.from(readStateByUser.entries()).map(([participantId, state]) => ({
+      userId: new mongoose.Types.ObjectId(participantId),
+      unreadCount: Math.max(0, Number(state?.unreadCount || 0)),
+      lastReadAt: state?.lastReadAt || null,
+    }));
+
+    chat.lastMessageAt = now;
     chat.lastMessageText = text.trim().slice(0, 500);
     await chat.save({ session });
 
@@ -268,6 +367,51 @@ export const sendMessage = async (userId, chatId, text) => {
 
   session.endSession();
   return message;
+};
+
+export const markChatRead = async (userId, chatId) => {
+  const chat = await Chat.findById(chatId);
+  if (!chat) throw notFound("Chat not found", "CHAT_NOT_FOUND");
+
+  const viewerId = userId.toString();
+  const isParticipant = chat.participants.some(
+    (id) => id.toString() === viewerId
+  );
+  if (!isParticipant) throw forbidden("Not allowed", "CHAT_ACCESS_FORBIDDEN");
+
+  const now = new Date();
+  const participantIds = chat.participants.map((id) => id.toString());
+  const readStateByUser = toUserReadStateMap(chat);
+  const current = readStateByUser.get(viewerId) || {
+    unreadCount: 0,
+    lastReadAt: null,
+  };
+  current.unreadCount = 0;
+  current.lastReadAt = now;
+  readStateByUser.set(viewerId, current);
+
+  chat.readState = participantIds.map((participantId) => {
+    const state = readStateByUser.get(participantId) || {
+      unreadCount: 0,
+      lastReadAt: null,
+    };
+
+    return {
+      userId: new mongoose.Types.ObjectId(participantId),
+      unreadCount: Math.max(0, Number(state.unreadCount || 0)),
+      lastReadAt: state.lastReadAt || null,
+    };
+  });
+
+  await chat.save();
+  const summary = await getChatUnreadSummary(userId);
+
+  return {
+    chatId: chat._id.toString(),
+    unread: 0,
+    totalUnread: summary.unread,
+    unreadByChatId: summary.unreadByChatId,
+  };
 };
 
 export const deleteChatByRequestId = async (requestId, session = null) => {

@@ -11,10 +11,12 @@ import {
   getIncomingRequests,
   getItemById,
   getMyItems,
+  getMyNotificationsSummary,
   getMyRequests,
   getRequestDetails,
   listCategories,
   listLocations,
+  markRequestNotificationsRead,
   respondToRequest,
   updateItem,
 } from "../services/marketplace.service.js";
@@ -24,6 +26,7 @@ import {
   historyQuerySchema,
   listItemsQuerySchema,
   listMyItemsQuerySchema,
+  markRequestsReadSchema,
   listRequestsQuerySchema,
   respondSchema,
   updateItemSchema,
@@ -241,12 +244,28 @@ export const getRequestHandler = async (req, res, next) => {
 export const respondRequestHandler = async (req, res, next) => {
   try {
     const data = respondSchema.parse(req.body);
-    const request = await respondToRequest(req.user.id, req.params.id, data.action);
+    const result = await respondToRequest(req.user.id, req.params.id, data.action);
+    const request = result?.request || result;
+    const autoCanceledRequests = result?.autoCanceledRequests || [];
+
     await sendRequestLifecyclePushSafe({
       event: request.status === "APPROVED" ? "REQUEST_APPROVED" : "REQUEST_REJECTED",
       request,
       actorId: req.user.id,
     });
+
+    if (autoCanceledRequests.length > 0) {
+      await Promise.all(
+        autoCanceledRequests.map((canceledRequest) =>
+          sendRequestLifecyclePushSafe({
+            event: "REQUEST_AUTO_CANCELED_CONFLICT",
+            request: canceledRequest,
+            actorId: req.user.id,
+          })
+        )
+      );
+    }
+
     res.status(200).json({ success: true, request });
   } catch (err) {
     next(err);
@@ -259,6 +278,12 @@ export const confirmRequestHandler = async (req, res, next) => {
     if (request?.status === "COMPLETED") {
       await sendRequestLifecyclePushSafe({
         event: "REQUEST_COMPLETED",
+        request,
+        actorId: req.user.id,
+      });
+    } else if (request?.status === "APPROVED") {
+      await sendRequestLifecyclePushSafe({
+        event: "REQUEST_CONFIRMATION_PENDING",
         request,
         actorId: req.user.id,
       });
@@ -329,6 +354,28 @@ export const hardDeleteRequestHandler = async (req, res, next) => {
   try {
     const result = await hardDeleteRequest(req.user.id, req.params.id);
     res.status(200).json({ success: true, ...result });
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const notificationsSummaryHandler = async (req, res, next) => {
+  try {
+    const data = await getMyNotificationsSummary(req.user.id);
+    res.status(200).json({ success: true, data });
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const markRequestNotificationsReadHandler = async (req, res, next) => {
+  try {
+    const payload = markRequestsReadSchema.parse(req.body || {});
+    await markRequestNotificationsRead(req.user.id, payload);
+    res.status(200).json({
+      success: true,
+      message: "Request notifications marked as read",
+    });
   } catch (err) {
     next(err);
   }

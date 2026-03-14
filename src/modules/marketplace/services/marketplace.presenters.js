@@ -232,8 +232,9 @@ export const resolveViewerRequestState = ({
   };
 };
 
-export const formatRequestWithUsers = (request) => {
+export const formatRequestWithUsers = (request, options = {}) => {
   if (!request) return request;
+  const viewerId = options.viewerId ? toObjectIdString(options.viewerId) : "";
   const owner =
     request.ownerId && typeof request.ownerId === "object"
       ? request.ownerId
@@ -268,15 +269,43 @@ export const formatRequestWithUsers = (request) => {
     ? normalizeHistoryItemDetails(offeredItem)
     : null;
 
+  const ownerSeenAt = request.ownerSeenAt || null;
+  const requesterSeenAt = request.requesterSeenAt || null;
+  const ownerId = owner?._id?.toString?.() || toObjectIdString(request.ownerId);
+  const requesterId =
+    requester?._id?.toString?.() || toObjectIdString(request.requesterId);
+  const isSeenByOwner = Boolean(ownerSeenAt);
+  const isSeenByRequester = Boolean(requesterSeenAt);
+  let viewerSeen = null;
+  let viewerUnread = null;
+
+  if (viewerId) {
+    if (ownerId && ownerId === viewerId) {
+      viewerSeen = isSeenByOwner;
+    } else if (requesterId && requesterId === viewerId) {
+      viewerSeen = isSeenByRequester;
+    }
+
+    if (viewerSeen !== null) {
+      viewerUnread = !viewerSeen;
+    }
+  }
+
   return {
     ...request,
     id: request._id?.toString?.() || request._id,
-    ownerId: owner?._id?.toString?.() || request.ownerId,
-    requesterId: requester?._id?.toString?.() || request.requesterId,
+    ownerId,
+    requesterId,
     itemId: item?._id?.toString?.() || request.itemId,
     offeredItemId: offeredItem?._id?.toString?.() || request.offeredItemId,
     chatId: request.chatId?.toString?.() || request.chatId || null,
     cancellationReason: request.cancellationReason || null,
+    ownerSeenAt,
+    requesterSeenAt,
+    isSeenByOwner,
+    isSeenByRequester,
+    viewerSeen,
+    viewerUnread,
     ownerName,
     requesterName,
     itemSnapshot,
