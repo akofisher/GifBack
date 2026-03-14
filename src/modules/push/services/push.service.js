@@ -187,6 +187,15 @@ export const registerPushToken = async ({
 
   await enforceUserTokenLimit(userId);
 
+  logger.info(
+    {
+      userId: toObjectIdString(userId),
+      deviceId,
+      platform,
+    },
+    "Push token registered"
+  );
+
   return {
     id: row?._id?.toString?.() || "",
     userId: toObjectIdString(row?.userId),
@@ -207,6 +216,15 @@ export const removePushTokenByDevice = async ({ userId, deviceId }) => {
         lastErrorCode: "TOKEN_REMOVED_BY_USER",
       },
     }
+  );
+
+  logger.info(
+    {
+      userId: toObjectIdString(userId),
+      deviceId,
+      deleted: result.modifiedCount > 0,
+    },
+    "Push token removed by device"
   );
 
   return {
@@ -275,6 +293,13 @@ export const sendPushToUsers = async ({
 
   const messaging = getMessagingClient();
   if (!messaging) {
+    logger.warn(
+      {
+        type: data?.type || "GENERIC",
+        recipients: uniqueRows.length,
+      },
+      "Push skipped because Firebase messaging is not initialized"
+    );
     return {
       delivered: false,
       sent: 0,
@@ -283,6 +308,15 @@ export const sendPushToUsers = async ({
       disabled: true,
     };
   }
+
+  logger.info(
+    {
+      type: data?.type || "GENERIC",
+      recipients: uniqueRows.length,
+      users: normalizedUserIds.length,
+    },
+    "Push send started"
+  );
 
   const actorKey = toObjectIdString(actorId);
   const messages = uniqueRows.map((row) => {
@@ -358,6 +392,28 @@ export const sendPushToUsers = async ({
     );
   }
 
+  if (failed > 0) {
+    logger.warn(
+      {
+        type: data?.type || "GENERIC",
+        sent,
+        failed,
+        invalidated: invalidTokens.size,
+      },
+      "Push send completed with failures"
+    );
+  } else {
+    logger.info(
+      {
+        type: data?.type || "GENERIC",
+        sent,
+        failed,
+        invalidated: invalidTokens.size,
+      },
+      "Push send completed"
+    );
+  }
+
   return {
     delivered: sent > 0,
     sent,
@@ -370,7 +426,13 @@ export const sendPushToUsersSafe = async (payload) => {
   try {
     return await sendPushToUsers(payload);
   } catch (error) {
-    logger.warn({ err: error }, "Push send failed");
+    logger.warn(
+      {
+        err: error,
+        type: payload?.data?.type || "GENERIC",
+      },
+      "Push send failed"
+    );
     return { delivered: false, sent: 0, failed: 0, invalidated: 0 };
   }
 };
@@ -439,7 +501,18 @@ export const sendRequestLifecyclePushSafe = async ({
 
   const ownerId = toObjectIdString(request.ownerId || request.owner?.id);
   const requesterId = toObjectIdString(request.requesterId || request.requester?.id);
-  const userIds = Array.from(new Set([ownerId, requesterId].filter(Boolean)));
+  const actorKey = toObjectIdString(actorId);
+  const recipientsByEvent = {
+    REQUEST_CREATED: [ownerId],
+    REQUEST_APPROVED: [requesterId],
+    REQUEST_REJECTED: [requesterId],
+    REQUEST_COMPLETED: [ownerId, requesterId],
+    REQUEST_CANCELED: [ownerId, requesterId],
+    REQUEST_EXPIRED: [ownerId, requesterId],
+  };
+  const userIds = Array.from(
+    new Set((recipientsByEvent[event] || [ownerId, requesterId]).filter(Boolean))
+  ).filter((userId) => !actorKey || userId !== actorKey);
   if (!userIds.length) return;
 
   const itemTitle =
@@ -456,6 +529,7 @@ export const sendRequestLifecyclePushSafe = async ({
     data: {
       type: "REQUEST_UPDATED",
       event,
+      senderId: actorKey,
       requestId: toObjectIdString(request.id || request._id),
       itemId: toObjectIdString(request.itemId),
       chatId: toObjectIdString(request.chatId),
@@ -484,9 +558,10 @@ export const sendChatMessagePushSafe = async ({ chatId, senderId, text }) => {
       .join(" ")
       .trim();
 
+    const senderKey = toObjectIdString(senderId);
     const userIds = Array.from(
       new Set(chat.participants.map(toObjectIdString).filter(Boolean))
-    );
+    ).filter((participantId) => participantId !== senderKey);
     if (!userIds.length) return;
 
     await sendPushToUsersSafe({
@@ -495,6 +570,7 @@ export const sendChatMessagePushSafe = async ({ chatId, senderId, text }) => {
       data: {
         type: "CHAT_UPDATED",
         event: "MESSAGE_CREATED",
+        senderId: senderKey,
         chatId: toObjectIdString(chatId),
         requestId: toObjectIdString(chat.requestId),
       },
