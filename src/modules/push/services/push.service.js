@@ -412,6 +412,8 @@ export const sendPushToUsers = async ({
   let sent = 0;
   let failed = 0;
   const invalidTokens = new Set();
+  const failureByCode = new Map();
+  const sampleFailures = [];
 
   for (const batch of splitBatches(messages, MAX_MESSAGES_PER_BATCH)) {
     const response = await messaging.sendEach(batch);
@@ -422,6 +424,14 @@ export const sendPushToUsers = async ({
       }
 
       failed += 1;
+      const code = entry.error?.code || "unknown";
+      failureByCode.set(code, (failureByCode.get(code) || 0) + 1);
+      if (sampleFailures.length < 3) {
+        sampleFailures.push({
+          code,
+          message: entry.error?.message || "",
+        });
+      }
       if (isInvalidTokenError(entry.error)) {
         invalidTokens.add(batch[index].token);
       }
@@ -442,12 +452,18 @@ export const sendPushToUsers = async ({
   }
 
   if (failed > 0) {
+    const failureCodes = Array.from(failureByCode.entries()).map(([code, count]) => ({
+      code,
+      count,
+    }));
     logger.warn(
       {
         type: data?.type || "GENERIC",
         sent,
         failed,
         invalidated: invalidTokens.size,
+        failureCodes,
+        sampleFailures,
       },
       "Push send completed with failures"
     );
