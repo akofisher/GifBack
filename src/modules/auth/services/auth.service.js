@@ -9,6 +9,7 @@ import {
 } from "../../agreement/services/agreement.service.js";
 import { enforceUserAccessBlock } from "../../user/services/user-block.service.js";
 import { AppError, badRequest, conflict, forbidden, notFound, unauthorized } from "../../../utils/appError.js";
+import logger from "../../../utils/logger.js";
 import {
   EMAIL_VERIFICATION_REQUIRED,
   EMAIL_VERIFY_MAX_ATTEMPTS,
@@ -17,6 +18,7 @@ import {
   PASSWORD_RESET_RESEND_COOLDOWN_SECONDS,
   PASSWORD_RESET_SECRET,
   PASSWORD_RESET_TOKEN_TTL_MINUTES,
+  REFRESH_REUSE_GRACE_SECONDS,
 } from "./auth.config.js";
 import {
   getPasswordResetCodeExpiryDate,
@@ -778,7 +780,10 @@ export const resetPasswordWithToken = async ({
 };
 
 // ✅ REFRESH with rotation
-export const refreshAccessToken = async (refreshToken) => {
+export const refreshAccessToken = async (
+  refreshToken,
+  { userAgent = "", ip = "" } = {}
+) => {
   if (!refreshToken) {
     throw unauthorized("No refresh token", "MISSING_REFRESH_TOKEN");
   }
@@ -804,10 +809,32 @@ export const refreshAccessToken = async (refreshToken) => {
 
   const incomingHash = hashToken(refreshToken);
   if (incomingHash !== session.refreshTokenHash) {
-    session.revokedAt = new Date();
-    await session.save();
+    const now = new Date();
+    const lastUsedAt = session.lastUsedAt ? new Date(session.lastUsedAt) : null;
+    const isWithinGraceWindow =
+      Boolean(lastUsedAt) &&
+      now.getTime() - lastUsedAt.getTime() <= REFRESH_REUSE_GRACE_SECONDS * 1000;
+    const hasFingerprint = Boolean(session.userAgent || session.ip);
+    const sameClient =
+      !hasFingerprint ||
+      (session.userAgent && userAgent && session.userAgent === userAgent) ||
+      (session.ip && ip && session.ip === ip);
 
-    throw unauthorized("Refresh token invalidated", "REFRESH_TOKEN_REUSED");
+    // Allow a short grace window to avoid false session revocations
+    // when multiple refresh requests race from the same client.
+    if (!(isWithinGraceWindow && sameClient)) {
+      session.revokedAt = now;
+      await session.save();
+      throw unauthorized("Refresh token invalidated", "REFRESH_TOKEN_REUSED");
+    }
+
+    logger.warn(
+      {
+        sessionId: session._id?.toString(),
+        userId: session.userId?.toString(),
+      },
+      "Refresh token mismatch tolerated within grace window"
+    );
   }
 
   const user = await User.findById(userId);
@@ -826,7 +853,9 @@ export const refreshAccessToken = async (refreshToken) => {
   const newRefreshToken = signRefreshToken(user, session._id.toString());
 
   session.refreshTokenHash = hashToken(newRefreshToken);
-  session.lastUsedAt = new Date();
+  const now = Date.now();
+  session.lastUsedAt = new Date(now);
+  session.expiresAt = refreshExpiresAt(now);
   await session.save();
 
   return { accessToken: newAccessToken, refreshToken: newRefreshToken };

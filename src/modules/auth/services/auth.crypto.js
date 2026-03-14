@@ -69,7 +69,7 @@ export const signRefreshToken = (user, sessionId) =>
     { expiresIn: REFRESH_TTL }
   );
 
-export const refreshExpiresAt = () => {
+export const refreshExpiresAt = (baseTimeMs = Date.now()) => {
   const days = Number(process.env.REFRESH_COOKIE_DAYS || 365);
-  return new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+  return new Date(baseTimeMs + days * 24 * 60 * 60 * 1000);
 };

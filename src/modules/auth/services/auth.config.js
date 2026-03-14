@@ -14,6 +14,10 @@ const parsePositiveNumber = (value, fallback) => {
 
 export const ACCESS_TTL = process.env.ACCESS_TOKEN_TTL || "15m";
 export const REFRESH_TTL = process.env.REFRESH_TOKEN_TTL || "365d";
+export const REFRESH_REUSE_GRACE_SECONDS = parsePositiveNumber(
+  process.env.REFRESH_REUSE_GRACE_SECONDS,
+  30
+);
 
 export const EMAIL_VERIFICATION_REQUIRED = parseEnvBoolean(
   process.env.EMAIL_VERIFICATION_REQUIRED,

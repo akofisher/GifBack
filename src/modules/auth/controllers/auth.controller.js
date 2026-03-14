@@ -275,18 +275,31 @@ export const confirmPasswordResetHandler = async (req, res, next) => {
 
 export const refresh = async (req, res, next) => {
   try {
-    const refreshToken = req.cookies?.[REFRESH_COOKIE_NAME];
+    const cookieRefreshToken = req.cookies?.[REFRESH_COOKIE_NAME];
+    const bodyRefreshToken =
+      typeof req.body?.refreshToken === "string"
+        ? req.body.refreshToken.trim()
+        : "";
+    const refreshToken = cookieRefreshToken || bodyRefreshToken;
     if (!refreshToken) {
       throw unauthorized("No refresh token", "MISSING_REFRESH_TOKEN");
     }
 
     const { accessToken, refreshToken: newRefreshToken } =
-      await refreshAccessToken(refreshToken);
+      await refreshAccessToken(refreshToken, {
+        userAgent: req.headers["user-agent"] || "",
+        ip: getClientIp(req),
+      });
 
     // set rotated refresh cookie
     res.cookie(REFRESH_COOKIE_NAME, newRefreshToken, getRefreshCookieOptions());
 
-    res.status(200).json({ success: true, accessToken });
+    const responsePayload = { success: true, accessToken };
+    if (!cookieRefreshToken) {
+      responsePayload.refreshToken = newRefreshToken;
+    }
+
+    res.status(200).json(responsePayload);
   } catch (err) {
     next(err);
   }
